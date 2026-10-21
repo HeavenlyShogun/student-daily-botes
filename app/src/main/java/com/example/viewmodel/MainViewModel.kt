@@ -11,8 +11,10 @@ import com.example.data.model.JournalMood
 import com.example.data.model.Priority
 import com.example.data.model.ReminderStage
 import com.example.data.model.RoutinePreset
+import com.example.data.model.SubTask
 import com.example.data.model.TodoTask
 import com.example.data.repository.StudentLifeRepository
+import com.example.ui.util.FeedbackManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +39,7 @@ data class FocusTimerUiState(
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = StudentLifeRepository(AppDatabase.getDatabase(application))
+    val feedbackManager = FeedbackManager(application)
 
     val allTasks: StateFlow<List<TodoTask>> = repository.allTasks
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -64,9 +67,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var timerJob: Job? = null
 
-    // Health actions
+    // AI Status & Results
+    private val _isAiLoading = MutableStateFlow(false)
+    val isAiLoading: StateFlow<Boolean> = _isAiLoading.asStateFlow()
+
+    private val _aiConsultationText = MutableStateFlow<String?>(null)
+    val aiConsultationText: StateFlow<String?> = _aiConsultationText.asStateFlow()
+
+    private val _aiJournalFeedback = MutableStateFlow<String?>(null)
+    val aiJournalFeedback: StateFlow<String?> = _aiJournalFeedback.asStateFlow()
+
+    // Health actions (Immediate local database persistence)
     fun addWater(amountMl: Int) {
-        viewModelScope.launch { repository.addWater(amountMl) }
+        viewModelScope.launch {
+            repository.addWater(amountMl)
+            feedbackManager.playStartSound()
+        }
     }
 
     fun resetWater() {
@@ -78,15 +94,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logExercise(minutes: Int, type: String) {
-        viewModelScope.launch { repository.logExercise(minutes, type) }
+        viewModelScope.launch {
+            repository.logExercise(minutes, type)
+            feedbackManager.playCompleteSound()
+        }
     }
 
     fun toggleMeal(meal: String) {
-        viewModelScope.launch { repository.toggleMeal(meal) }
+        viewModelScope.launch {
+            repository.toggleMeal(meal)
+            feedbackManager.playStartSound()
+        }
     }
 
     fun toggleScreenWindDown() {
-        viewModelScope.launch { repository.toggleScreenWindDown() }
+        viewModelScope.launch {
+            repository.toggleScreenWindDown()
+            feedbackManager.playStartSound()
+        }
     }
 
     fun selectPreset(preset: RoutinePreset) {
@@ -101,6 +126,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         priority: Priority,
         targetMinutes: Int,
         microSteps: List<String>,
+        subTasks: List<SubTask> = emptyList(),
         dueDate: String = repository.getTodayDateString(),
         dueTime: String = "20:00"
     ) {
@@ -113,19 +139,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 reminderStage = ReminderStage.GENTLE,
                 targetMinutes = targetMinutes,
                 microSteps = microSteps,
+                subTasks = subTasks,
                 dueDate = dueDate,
                 dueTime = dueTime
             )
             repository.addTask(task)
+            feedbackManager.playStartSound()
         }
     }
 
     fun toggleTaskCompletion(task: TodoTask) {
-        viewModelScope.launch { repository.toggleTaskCompletion(task) }
+        viewModelScope.launch {
+            repository.toggleTaskCompletion(task)
+            if (!task.isCompleted) {
+                feedbackManager.playCompleteSound()
+            }
+        }
+    }
+
+    fun toggleSubTask(taskId: Long, subTaskId: String) {
+        viewModelScope.launch {
+            repository.toggleSubTask(taskId, subTaskId)
+            feedbackManager.playStartSound()
+        }
+    }
+
+    fun addSubTask(taskId: Long, title: String) {
+        viewModelScope.launch {
+            repository.addSubTask(taskId, title)
+        }
+    }
+
+    fun deleteSubTask(taskId: Long, subTaskId: String) {
+        viewModelScope.launch {
+            repository.deleteSubTask(taskId, subTaskId)
+        }
     }
 
     fun advanceMicroStep(task: TodoTask) {
-        viewModelScope.launch { repository.advanceMicroStep(task) }
+        viewModelScope.launch {
+            repository.advanceMicroStep(task)
+            feedbackManager.playCompleteSound()
+        }
     }
 
     fun deleteTask(task: TodoTask) {
@@ -160,6 +215,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 tomorrowImprovement = tomorrowImprovement
             )
             repository.saveJournalEntry(entry)
+            feedbackManager.playCompleteSound()
         }
     }
 
@@ -177,6 +233,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             modeName = modeName,
             ambientSound = _timerState.value.ambientSound
         )
+        feedbackManager.playStartSound()
 
         timerJob = viewModelScope.launch {
             while (_timerState.value.remainingSeconds > 0) {
@@ -185,7 +242,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val remaining = _timerState.value.remainingSeconds - 1
                     _timerState.value = _timerState.value.copy(remainingSeconds = remaining)
                     if (remaining == 0) {
-                        // Finish session
+                        feedbackManager.playCompleteSound()
                         val completedMins = _timerState.value.totalSeconds / 60
                         _timerState.value.activeTaskId?.let { taskId ->
                             repository.addFocusMinutesToTask(taskId, completedMins)
@@ -200,11 +257,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun togglePauseTimer() {
         val current = _timerState.value
         _timerState.value = current.copy(isPaused = !current.isPaused)
+        feedbackManager.playPauseSound()
     }
 
     fun stopTimer() {
         timerJob?.cancel()
-        // Save partial focus if > 1 min
         val spentSeconds = _timerState.value.totalSeconds - _timerState.value.remainingSeconds
         if (spentSeconds >= 60 && _timerState.value.activeTaskId != null) {
             val mins = spentSeconds / 60
@@ -213,10 +270,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         _timerState.value = _timerState.value.copy(isRunning = false, isPaused = false)
+        feedbackManager.playPauseSound()
     }
 
     fun setAmbientSound(sound: String) {
         _timerState.value = _timerState.value.copy(ambientSound = sound)
+    }
+
+    // AI Services (Gemini Integration)
+    fun decomposeTaskWithAi(title: String, subject: String, onResult: (List<String>) -> Unit) {
+        viewModelScope.launch {
+            _isAiLoading.value = true
+            val result = repository.decomposeTaskWithAi(title, subject)
+            _isAiLoading.value = false
+            onResult(result.getOrDefault(emptyList()))
+        }
+    }
+
+    fun requestAiHealthAdvice() {
+        viewModelScope.launch {
+            val health = todayHealth.value ?: DailyHealthLog(date = repository.getTodayDateString())
+            val pendingCount = activeTasks.value.size
+            _isAiLoading.value = true
+            val result = repository.getAiHealthAdvice(health, pendingCount)
+            _isAiLoading.value = false
+            _aiConsultationText.value = result.getOrNull()
+        }
+    }
+
+    fun requestAiJournalFeedback(mood: JournalMood, goodThings: List<String>, reflection: String) {
+        viewModelScope.launch {
+            _isAiLoading.value = true
+            val result = repository.getAiJournalFeedback(mood, goodThings, reflection)
+            _isAiLoading.value = false
+            _aiJournalFeedback.value = result.getOrNull()
+        }
+    }
+
+    fun clearAiConsultation() {
+        _aiConsultationText.value = null
+    }
+
+    fun clearAiJournalFeedback() {
+        _aiJournalFeedback.value = null
     }
 
     fun getSecretaryGreeting(): SecretaryBriefing {

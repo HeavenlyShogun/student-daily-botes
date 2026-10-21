@@ -22,20 +22,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.SentimentSatisfiedAlt
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
@@ -44,6 +45,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -59,19 +61,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.DailyJournalEntry
 import com.example.data.model.JournalMood
-import com.example.ui.theme.PrimaryBlue
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TertiaryAmber
 import com.example.viewmodel.MainViewModel
 
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JournalScreen(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
-    val currentJournal = viewModel.todayJournal.value
-    val allJournals = viewModel.allJournals.value
+    val currentJournal by viewModel.todayJournal.collectAsState()
+    val allJournals by viewModel.allJournals.collectAsState()
+    val isAiLoading by viewModel.isAiLoading.collectAsState()
+    val aiJournalFeedback by viewModel.aiJournalFeedback.collectAsState()
 
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabTitles = listOf("今日手帳與反思", "成長足跡歷史")
@@ -90,13 +93,13 @@ fun JournalScreen(
     // Sync when currentJournal changes from database
     LaunchedEffect(currentJournal) {
         if (currentJournal != null) {
-            mood = currentJournal.mood
-            energyLevel = currentJournal.energyLevel
-            goodThing1 = currentJournal.goodThing1
-            goodThing2 = currentJournal.goodThing2
-            goodThing3 = currentJournal.goodThing3
-            selfReflection = currentJournal.selfReflection
-            tomorrowImprovement = currentJournal.tomorrowImprovement
+            mood = currentJournal!!.mood
+            energyLevel = currentJournal!!.energyLevel
+            goodThing1 = currentJournal!!.goodThing1
+            goodThing2 = currentJournal!!.goodThing2
+            goodThing3 = currentJournal!!.goodThing3
+            selfReflection = currentJournal!!.selfReflection
+            tomorrowImprovement = currentJournal!!.tomorrowImprovement
         }
     }
 
@@ -162,31 +165,106 @@ fun JournalScreen(
                     )
                 }
 
-                // Save button
-                item {
-                    Button(
-                        onClick = {
-                            viewModel.saveJournal(
-                                mood = mood,
-                                energyLevel = energyLevel,
-                                goodThing1 = goodThing1,
-                                goodThing2 = goodThing2,
-                                goodThing3 = goodThing3,
-                                selfReflection = selfReflection,
-                                tomorrowImprovement = tomorrowImprovement
+                // AI Growth Coach Feedback Section
+                if (!aiJournalFeedback.isNullOrBlank()) {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.6f)
                             )
-                            saveSuccessMessage = true
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                            .testTag("save_journal_button"),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.AutoAwesome,
+                                            contentDescription = "AI Feedback",
+                                            tint = MaterialTheme.colorScheme.tertiary
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "✨ AI 學伴成長賦能點評 (Gemini)",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { viewModel.clearAiJournalFeedback() },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = "Close", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = aiJournalFeedback!!,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    lineHeight = 20.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Action buttons: Save & AI Coach
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(Icons.Default.Check, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("保存今日正向反思手帳", fontWeight = FontWeight.Bold)
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.requestAiJournalFeedback(
+                                    mood = mood,
+                                    goodThings = listOf(goodThing1, goodThing2, goodThing3),
+                                    reflection = selfReflection
+                                )
+                            },
+                            modifier = Modifier.weight(1f).height(50.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            enabled = !isAiLoading
+                        ) {
+                            if (isAiLoading) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                            } else {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("AI 導師點評", fontSize = 13.sp)
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                viewModel.saveJournal(
+                                    mood = mood,
+                                    energyLevel = energyLevel,
+                                    goodThing1 = goodThing1,
+                                    goodThing2 = goodThing2,
+                                    goodThing3 = goodThing3,
+                                    selfReflection = selfReflection,
+                                    tomorrowImprovement = tomorrowImprovement
+                                )
+                                saveSuccessMessage = true
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(50.dp)
+                                .testTag("save_journal_button"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("保存手帳", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
                     }
                 }
 
@@ -198,7 +276,7 @@ fun JournalScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "✨ 手帳已成功存檔！微小進步累積成不凡，今天辛苦了！",
+                                text = "✨ 手帳已即時寫入本機資料庫！微小進步累積成不凡，今天辛苦了！",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = SuccessGreen,
                                 fontWeight = FontWeight.Bold,
@@ -349,7 +427,6 @@ fun MoodAndEnergySection(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Secretary feedback for current mood
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),

@@ -4,6 +4,10 @@ import androidx.room.TypeConverter
 import com.example.data.model.JournalMood
 import com.example.data.model.Priority
 import com.example.data.model.ReminderStage
+import com.example.data.model.SubTask
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.UUID
 
 class Converters {
     @TypeConverter
@@ -15,6 +19,42 @@ class Converters {
     fun toStringList(value: String?): List<String> {
         if (value.isNullOrBlank()) return emptyList()
         return value.split("|||").filter { it.isNotBlank() }
+    }
+
+    @TypeConverter
+    fun fromSubTaskList(list: List<SubTask>?): String {
+        if (list.isNullOrEmpty()) return "[]"
+        val array = JSONArray()
+        list.forEach { item ->
+            val obj = JSONObject()
+            obj.put("id", item.id)
+            obj.put("title", item.title)
+            obj.put("isCompleted", item.isCompleted)
+            array.put(obj)
+        }
+        return array.toString()
+    }
+
+    @TypeConverter
+    fun toSubTaskList(value: String?): List<SubTask> {
+        if (value.isNullOrBlank() || value == "[]") return emptyList()
+        val list = mutableListOf<SubTask>()
+        try {
+            val array = JSONArray(value)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(
+                    SubTask(
+                        id = obj.optString("id", UUID.randomUUID().toString()),
+                        title = obj.optString("title", ""),
+                        isCompleted = obj.optBoolean("isCompleted", false)
+                    )
+                )
+            }
+        } catch (_: Exception) {
+            // Safe fallback
+        }
+        return list
     }
 
     @TypeConverter

@@ -21,18 +21,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -40,10 +39,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,6 +56,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -68,14 +68,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Priority
 import com.example.data.model.ReminderStage
+import com.example.data.model.SubTask
 import com.example.data.model.TodoTask
 import com.example.ui.theme.DangerRed
-import com.example.ui.theme.ExerciseEmerald
-import com.example.ui.theme.PrimaryBlue
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningOrange
 import com.example.viewmodel.MainViewModel
@@ -85,8 +85,9 @@ fun TodoListScreen(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
-    val tasks = viewModel.allTasks.value
-    val timerState = viewModel.timerState.value
+    val tasks by viewModel.allTasks.collectAsState()
+    val timerState by viewModel.timerState.collectAsState()
+    val isAiLoading by viewModel.isAiLoading.collectAsState()
 
     var selectedPriorityFilter by remember { mutableStateOf<Priority?>(null) }
     var selectedSubjectFilter by remember { mutableStateOf<String?>(null) }
@@ -96,6 +97,7 @@ fun TodoListScreen(
     var showAddTaskDialog by remember { mutableStateOf(false) }
     var taskForProcrastinationBuster by remember { mutableStateOf<TodoTask?>(null) }
     var showTimerModal by remember { mutableStateOf(false) }
+    var taskForAddSubTask by remember { mutableStateOf<TodoTask?>(null) }
 
     val filteredTasks = tasks.filter { task ->
         (selectedPriorityFilter == null || task.priority == selectedPriorityFilter) &&
@@ -127,7 +129,6 @@ fun TodoListScreen(
         ) {
             item {
                 Spacer(modifier = Modifier.height(8.dp))
-                // Stepped reminder mechanism explanation & cognitive relief banner
                 SteppedReminderBanner()
             }
 
@@ -163,6 +164,9 @@ fun TodoListScreen(
                     TaskCard(
                         task = task,
                         onToggleComplete = { viewModel.toggleTaskCompletion(task) },
+                        onToggleSubTask = { subTaskId -> viewModel.toggleSubTask(task.id, subTaskId) },
+                        onAddSubTaskClick = { taskForAddSubTask = task },
+                        onDeleteSubTask = { subTaskId -> viewModel.deleteSubTask(task.id, subTaskId) },
                         onStartTimer = {
                             viewModel.startFocusSession(task.targetMinutes, task, "${task.subjectTag} 專注")
                             showTimerModal = true
@@ -181,13 +185,29 @@ fun TodoListScreen(
         }
     }
 
-    // Add Task Dialog
+    // Add Task Dialog (with AI decomposition)
     if (showAddTaskDialog) {
         AddTaskDialog(
+            isAiLoading = isAiLoading,
             onDismiss = { showAddTaskDialog = false },
-            onSave = { title, desc, subject, priority, targetMin, microSteps, dueDate, dueTime ->
-                viewModel.addTask(title, desc, subject, priority, targetMin, microSteps, dueDate, dueTime)
+            onDecomposeWithAi = { title, subject, onResult ->
+                viewModel.decomposeTaskWithAi(title, subject, onResult)
+            },
+            onSave = { title, desc, subject, priority, targetMin, microSteps, subTasks, dueDate, dueTime ->
+                viewModel.addTask(title, desc, subject, priority, targetMin, microSteps, subTasks, dueDate, dueTime)
                 showAddTaskDialog = false
+            }
+        )
+    }
+
+    // Add Subtask Dialog
+    taskForAddSubTask?.let { task ->
+        AddSubTaskDialog(
+            taskTitle = task.title,
+            onDismiss = { taskForAddSubTask = null },
+            onAdd = { subTitle ->
+                viewModel.addSubTask(task.id, subTitle)
+                taskForAddSubTask = null
             }
         )
     }
@@ -196,19 +216,25 @@ fun TodoListScreen(
     taskForProcrastinationBuster?.let { task ->
         ProcrastinationBusterDialog(
             task = task,
+            isAiLoading = isAiLoading,
             onDismiss = { taskForProcrastinationBuster = null },
+            onAiDecompose = {
+                viewModel.decomposeTaskWithAi(task.title, task.subjectTag) { newSteps ->
+                    viewModel.updateTaskReminderStage(task, ReminderStage.FOCUS)
+                }
+            },
             onAdvanceMicroStep = {
                 viewModel.advanceMicroStep(task)
             },
             onStart5MinSession = {
-                viewModel.startFocusSession(5, task, "5分鐘啟動突破")
+                viewModel.startFocusSession(5, task, "5分鐘微步啟動")
                 taskForProcrastinationBuster = null
                 showTimerModal = true
             }
         )
     }
 
-    // Fullscreen / Dedicated Focus Timer Modal
+    // Dedicated Focus Timer Modal
     if (showTimerModal) {
         FocusTimerDialog(
             timerState = timerState,
@@ -364,7 +390,6 @@ fun TaskFilterSection(
     onToggleIncomplete: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        // Subjects filter
         val subjects = listOf("全部科目", "國文", "英文", "數學", "自然", "社會", "生活", "大考複習")
         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             items(subjects) { subj ->
@@ -379,7 +404,6 @@ fun TaskFilterSection(
             }
         }
 
-        // Priority filter row
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -414,6 +438,9 @@ fun TaskFilterSection(
 fun TaskCard(
     task: TodoTask,
     onToggleComplete: () -> Unit,
+    onToggleSubTask: (String) -> Unit,
+    onAddSubTaskClick: () -> Unit,
+    onDeleteSubTask: (String) -> Unit,
     onStartTimer: () -> Unit,
     onOpenProcrastinationBuster: () -> Unit,
     onAdvanceMicroStep: () -> Unit,
@@ -421,6 +448,7 @@ fun TaskCard(
     onDelete: () -> Unit
 ) {
     var expandedStages by remember { mutableStateOf(false) }
+    var expandedSubTasks by remember { mutableStateOf(true) }
 
     ElevatedCard(
         modifier = Modifier
@@ -505,6 +533,7 @@ fun TaskCard(
                         text = task.title,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
+                        textDecoration = if (task.isCompleted) TextDecoration.LineThrough else null,
                         color = if (task.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                     )
 
@@ -574,12 +603,109 @@ fun TaskCard(
                 }
             }
 
+            // Independent SubTasks Section with Progress
+            Spacer(modifier = Modifier.height(10.dp))
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable { expandedSubTasks = !expandedSubTasks }
+                        ) {
+                            Icon(
+                                imageVector = if (expandedSubTasks) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = "Expand",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "子任務進度 (${task.completedSubTasksCount}/${task.totalSubTasksCount} · ${task.progressPercent}%)",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Text(
+                            text = "+ 新增子步驟",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clickable { onAddSubTaskClick() }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    LinearProgressIndicator(
+                        progress = { task.progressPercent / 100f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = if (task.progressPercent == 100) SuccessGreen else MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surface
+                    )
+
+                    AnimatedVisibility(visible = expandedSubTasks && task.subTasks.isNotEmpty()) {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.padding(top = 8.dp)
+                        ) {
+                            task.subTasks.forEach { subTask ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { onToggleSubTask(subTask.id) }
+                                        .padding(vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = subTask.isCompleted,
+                                        onCheckedChange = { onToggleSubTask(subTask.id) },
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = subTask.title,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        textDecoration = if (subTask.isCompleted) TextDecoration.LineThrough else null,
+                                        color = if (subTask.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = { onDeleteSubTask(subTask.id) },
+                                        modifier = Modifier.size(20.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Delete Subtask",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Micro-steps progress (5-minute procrastination buster)
             if (task.microSteps.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                    color = WarningOrange.copy(alpha = 0.1f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(10.dp)) {
@@ -589,34 +715,23 @@ fun TaskCard(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "⚡ 5分鐘微步突破 (${task.currentMicroStepIndex}/${task.microSteps.size})",
+                                text = "⚡ 5分鐘抗拖延微步 (${task.currentMicroStepIndex}/${task.microSteps.size})",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
+                                color = WarningOrange
                             )
                             if (task.currentMicroStepIndex < task.microSteps.size) {
                                 Text(
                                     text = "完成此微步 ➔",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
+                                    color = WarningOrange,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.clickable { onAdvanceMicroStep() }
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        val progress = if (task.microSteps.isNotEmpty()) task.currentMicroStepIndex.toFloat() / task.microSteps.size else 0f
-                        LinearProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp)),
-                            color = MaterialTheme.colorScheme.primary,
-                            trackColor = MaterialTheme.colorScheme.surface
-                        )
                         if (task.currentMicroStepIndex < task.microSteps.size) {
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "當前微步：${task.microSteps[task.currentMicroStepIndex]}",
                                 style = MaterialTheme.typography.bodySmall,
@@ -635,7 +750,6 @@ fun TaskCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Procrastination Buster button
                 OutlinedButton(
                     onClick = onOpenProcrastinationBuster,
                     modifier = Modifier.weight(1f),
@@ -652,7 +766,6 @@ fun TaskCard(
                     Text("抗拖延微步", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
                 }
 
-                // Focus Timer launch button
                 Button(
                     onClick = onStartTimer,
                     modifier = Modifier.weight(1f),
@@ -719,11 +832,13 @@ fun EmptyTaskStateCard(onAddTask: () -> Unit) {
     }
 }
 
-// Dialogs: Add Task, Procrastination Buster, and Focus Timer
+// Dialogs: Add Task, Add Subtask, Procrastination Buster, and Focus Timer
 @Composable
 fun AddTaskDialog(
+    isAiLoading: Boolean,
     onDismiss: () -> Unit,
-    onSave: (String, String, String, Priority, Int, List<String>, String, String) -> Unit
+    onDecomposeWithAi: (String, String, (List<String>) -> Unit) -> Unit,
+    onSave: (String, String, String, Priority, Int, List<String>, List<SubTask>, String, String) -> Unit
 ) {
     var title by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
@@ -734,11 +849,22 @@ fun AddTaskDialog(
     var microStep2 by remember { mutableStateOf("") }
     var microStep3 by remember { mutableStateOf("") }
 
-    val subjectOptions = listOf("數學", "英文", "國文", "自然", "社會", "生活", "複習")
+    val subjectOptions = listOf("數學", "英文", "國文", "自然", "社會", "生活", "大考複習")
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新增學習或生活待辦", fontWeight = FontWeight.Bold) },
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("新增學習或生活待辦", fontWeight = FontWeight.Bold)
+                if (isAiLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                }
+            }
+        },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item {
@@ -749,6 +875,32 @@ fun AddTaskDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+
+                // AI Decomposition Button
+                item {
+                    Button(
+                        onClick = {
+                            if (title.isNotBlank()) {
+                                onDecomposeWithAi(title, subject) { steps ->
+                                    if (steps.isNotEmpty()) microStep1 = steps.getOrNull(0) ?: ""
+                                    if (steps.size > 1) microStep2 = steps.getOrNull(1) ?: ""
+                                    if (steps.size > 2) microStep3 = steps.getOrNull(2) ?: ""
+                                }
+                            }
+                        },
+                        enabled = title.isNotBlank() && !isAiLoading,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondary
+                        ),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("✨ AI 一鍵智慧微步拆解 (Gemini)", fontSize = 12.sp)
+                    }
+                }
+
                 item {
                     OutlinedTextField(
                         value = desc,
@@ -832,7 +984,9 @@ fun AddTaskDialog(
                 onClick = {
                     if (title.isNotBlank()) {
                         val steps = listOf(microStep1, microStep2, microStep3).filter { it.isNotBlank() }
-                        onSave(title, desc, subject, priority, targetMin, steps, "", "")
+                        // Automatically initialize corresponding subtasks if microsteps are provided
+                        val subTasks = steps.map { SubTask(title = it, isCompleted = false) }
+                        onSave(title, desc, subject, priority, targetMin, steps, subTasks, "", "")
                     }
                 },
                 enabled = title.isNotBlank()
@@ -849,9 +1003,53 @@ fun AddTaskDialog(
 }
 
 @Composable
+fun AddSubTaskDialog(
+    taskTitle: String,
+    onDismiss: () -> Unit,
+    onAdd: (String) -> Unit
+) {
+    var subTitle by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新增子任務步驟", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "父任務：$taskTitle",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = subTitle,
+                    onValueChange = { subTitle = it },
+                    label = { Text("子任務內容 (例如：計算第3題、整理錯題)") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (subTitle.isNotBlank()) onAdd(subTitle) },
+                enabled = subTitle.isNotBlank()
+            ) {
+                Text("新增")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
 fun ProcrastinationBusterDialog(
     task: TodoTask,
+    isAiLoading: Boolean,
     onDismiss: () -> Unit,
+    onAiDecompose: () -> Unit,
     onAdvanceMicroStep: () -> Unit,
     onStart5MinSession: () -> Unit
 ) {
@@ -916,6 +1114,9 @@ fun ProcrastinationBusterDialog(
                                     if (isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
                                     else Color.Transparent
                                 )
+                                .clickable {
+                                    if (isCurrent) onAdvanceMicroStep()
+                                }
                                 .padding(vertical = 4.dp, horizontal = 6.dp)
                         ) {
                             Icon(
@@ -929,6 +1130,7 @@ fun ProcrastinationBusterDialog(
                                 text = step,
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                textDecoration = if (isDone) TextDecoration.LineThrough else null,
                                 color = if (isDone) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                             )
                         }
@@ -939,6 +1141,18 @@ fun ProcrastinationBusterDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+
+                // AI Re-decompose option
+                OutlinedButton(
+                    onClick = onAiDecompose,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    enabled = !isAiLoading
+                ) {
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (isAiLoading) "AI 正在重新微步拆解..." else "✨ AI 重新拆解為更小步驟", fontSize = 12.sp)
                 }
             }
         },

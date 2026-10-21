@@ -21,8 +21,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Lightbulb
@@ -37,23 +39,20 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -64,7 +63,6 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.DailyHealthLog
 import com.example.data.model.DailyJournalEntry
 import com.example.data.model.TodoTask
-import com.example.ui.theme.DangerRed
 import com.example.ui.theme.ExerciseEmerald
 import com.example.ui.theme.SleepPurple
 import com.example.ui.theme.SuccessGreen
@@ -82,12 +80,15 @@ fun SecretaryDashboardScreen(
     modifier: Modifier = Modifier
 ) {
     val briefing = viewModel.getSecretaryGreeting()
-    val healthLog by remember { mutableStateOf<DailyHealthLog?>(null) }
-    // Collect from viewModel flows in parent or directly
-    val currentHealth = viewModel.todayHealth.value ?: DailyHealthLog(date = "")
-    val activeTasks = viewModel.activeTasks.value
-    val journalEntry = viewModel.todayJournal.value
-    val timerState = viewModel.timerState.value
+    val todayHealth by viewModel.todayHealth.collectAsState()
+    val allTasks by viewModel.allTasks.collectAsState()
+    val activeTasks by viewModel.activeTasks.collectAsState()
+    val journalEntry by viewModel.todayJournal.collectAsState()
+    val timerState by viewModel.timerState.collectAsState()
+    val isAiLoading by viewModel.isAiLoading.collectAsState()
+    val aiConsultationText by viewModel.aiConsultationText.collectAsState()
+
+    val currentHealth = todayHealth ?: DailyHealthLog(date = "")
 
     LazyColumn(
         modifier = modifier
@@ -98,7 +99,6 @@ fun SecretaryDashboardScreen(
     ) {
         item {
             Spacer(modifier = Modifier.height(8.dp))
-            // Secretary Greeting Hero Card
             SecretaryHeroCard(
                 briefingTitle = briefing.title,
                 briefingQuote = briefing.quote,
@@ -107,7 +107,7 @@ fun SecretaryDashboardScreen(
             )
         }
 
-        // Timer Active Indicator if running
+        // Active timer banner
         if (timerState.isRunning) {
             item {
                 ActiveTimerBanner(
@@ -118,14 +118,24 @@ fun SecretaryDashboardScreen(
             }
         }
 
-        // Today's Life Balance & Health Radar Score Card
+        // Life Balance & Health Radar Score Card
         item {
             LifeBalanceOverviewCard(
                 healthLog = currentHealth,
-                completedTasksCount = viewModel.allTasks.value.count { it.isCompleted },
-                totalTasksCount = viewModel.allTasks.value.size,
+                completedTasksCount = allTasks.count { it.isCompleted },
+                totalTasksCount = allTasks.size,
                 hasJournaled = journalEntry?.goodThing1?.isNotBlank() == true,
                 onViewDetails = onNavigateToHealth
+            )
+        }
+
+        // Gemini AI Secretary Health & Study Consultation Section
+        item {
+            AiConsultationCard(
+                aiConsultationText = aiConsultationText,
+                isLoading = isAiLoading,
+                onRequestAdvice = { viewModel.requestAiHealthAdvice() },
+                onDismiss = { viewModel.clearAiConsultation() }
             )
         }
 
@@ -140,7 +150,7 @@ fun SecretaryDashboardScreen(
             }
         }
 
-        // Quick Daily Health Actions (1-tap logging)
+        // Quick Daily Health Actions (1-tap logging with instant Room write)
         item {
             QuickHealthCheckSection(
                 healthLog = currentHealth,
@@ -176,6 +186,101 @@ fun SecretaryDashboardScreen(
 
         item {
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+fun AiConsultationCard(
+    aiConsultationText: String?,
+    isLoading: Boolean,
+    onRequestAdvice: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "AI",
+                        tint = MaterialTheme.colorScheme.tertiary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "AI 學伴生活學習顧問 (Gemini)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                }
+                if (aiConsultationText != null) {
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (aiConsultationText != null) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = aiConsultationText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(12.dp),
+                        lineHeight = 19.sp
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onRequestAdvice,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    enabled = !isLoading
+                ) {
+                    Text(if (isLoading) "顧問思考中..." else "🔄 重新獲取 AI 診斷", fontSize = 12.sp)
+                }
+            } else {
+                Text(
+                    text = "綜合今日睡眠債、補水進度與未完成待辦，由 Gemini 針對你的個人節律提供精準自律建議。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f)
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Button(
+                    onClick = onRequestAdvice,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
+                    enabled = !isLoading
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("AI 顧問分析中...", fontSize = 12.sp)
+                    } else {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("✨ 獲取今日個人化作息與抗拖延診斷", fontSize = 12.sp)
+                    }
+                }
+            }
         }
     }
 }
@@ -224,7 +329,7 @@ fun SecretaryHeroCard(
                 }
                 Column {
                     Text(
-                        text = "學生專屬秘書",
+                        text = "學生生活秘書",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                     )
@@ -384,7 +489,6 @@ fun LifeBalanceOverviewCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                // Animated Circular Progress Gauge
                 val overallScore = healthLog.healthScore
                 val animatedProgress by animateFloatAsState(
                     targetValue = overallScore / 100f,
@@ -426,7 +530,6 @@ fun LifeBalanceOverviewCard(
                     }
                 }
 
-                // Balance Pillars Breakdown
                 Column(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.padding(start = 12.dp)
@@ -584,7 +687,6 @@ fun QuickHealthCheckSection(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Water Quick Add Chip
             QuickActionChip(
                 modifier = Modifier.weight(1f),
                 title = "+250ml 水",
@@ -593,7 +695,6 @@ fun QuickHealthCheckSection(
                 color = WaterCyan,
                 onClick = onAddWater
             )
-            // Breakfast
             QuickToggleChip(
                 modifier = Modifier.weight(1f),
                 title = "早餐",
@@ -601,7 +702,6 @@ fun QuickHealthCheckSection(
                 icon = Icons.Default.Restaurant,
                 onClick = { onToggleMeal("breakfast") }
             )
-            // Lunch
             QuickToggleChip(
                 modifier = Modifier.weight(1f),
                 title = "午餐",
@@ -609,7 +709,6 @@ fun QuickHealthCheckSection(
                 icon = Icons.Default.Restaurant,
                 onClick = { onToggleMeal("lunch") }
             )
-            // Wind down
             QuickToggleChip(
                 modifier = Modifier.weight(1f),
                 title = "數位排毒",
@@ -830,6 +929,14 @@ fun DashboardTaskItem(
                         color = MaterialTheme.colorScheme.primary,
                         fontSize = 11.sp
                     )
+                    if (task.subTasks.isNotEmpty()) {
+                        Text(
+                            text = "· 子任務 ${task.completedSubTasksCount}/${task.totalSubTasksCount}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(

@@ -26,7 +26,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DirectionsRun
+import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.LocalDrink
@@ -786,7 +786,7 @@ fun ExerciseTrackerCard(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.DirectionsRun,
+                            imageVector = Icons.AutoMirrored.Filled.DirectionsRun,
                             contentDescription = "Exercise",
                             tint = Color.White,
                             modifier = Modifier.size(20.dp)
