@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="0"
+        android:translateY="0">
+        <!-- Open book / planner pages -->
+        <path
+            android:fillColor="#E2E8F0"
+            android:pathData="M32,66 C38,62 46,61 54,64 C62,61 70,62 76,66 C76,68 76,46 76,44 C70,41 62,40 54,43 C46,40 38,41 32,44 Z" />
+        <path
+            android:fillColor="#38BDF8"
+            android:pathData="M52,43 C45,40 37,41 32,44 L32,66 C37,63 45,62 52,65 Z" />
+        <path
+            android:fillColor="#60A5FA"
+            android:pathData="M56,43 C63,40 71,41 76,44 L76,66 C71,63 63,62 56,65 Z" />
+        <!-- Book spine line -->
+        <path
+            android:fillColor="#1E293B"
+            android:pathData="M53.5,43 L54.5,43 L54.5,65 L53.5,65 Z" />
+
+        <!-- Circadian clock halo ring -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#F59E0B"
+            android:strokeWidth="3.2"
+            android:strokeLineCap="round"
+            android:pathData="M40,38 C43.5,33 48.5,30 54,30 C63.4,30 71,37.6 71,47 C71,51.5 69.3,55.6 66.5,58.7" />
+
+        <!-- Clock hands -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FBBF24"
+            android:strokeWidth="2.5"
+            android:strokeLineCap="round"
+            android:pathData="M54,47 L54,38" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FBBF24"
+            android:strokeWidth="2.5"
+            android:strokeLineCap="round"
+            android:pathData="M54,47 L60,51" />
+        <path
+            android:fillColor="#F59E0B"
+            android:pathData="M54,47m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0" />
+
+        <!-- Vitality & Growth Sprout at the top of clock -->
+        <path
+            android:fillColor="#10B981"
+            android:pathData="M54,30 C54,23 60,20 60,20 C60,20 61,26 57,28.5 Z" />
+        <path
+            android:fillColor="#34D399"
+            android:pathData="M54,30 C54,24 49,22 49,22 C49,22 48,27 52,29 Z" />
+
+        <!-- Sparkle of Wisdom / Focus -->
+        <path
+            android:fillColor="#FBBF24"
+            android:pathData="M35,31 L36.5,34.5 L40,36 L36.5,37.5 L35,41 L33.5,37.5 L30,36 L33.5,34.5 Z" />
+    </group>
+</vector>

@@ -1,0 +1,6 @@
+{
+  "name": "學生生活秘書",
+  "description": "專為高中生打造的全方位生活管理秘書：結合睡眠、飲食、運動三大科學健康計畫，動態階梯式待辦與抗拖延專注計時，以及每日正向反思成長手帳。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
