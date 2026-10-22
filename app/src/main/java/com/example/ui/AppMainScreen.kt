@@ -1,6 +1,9 @@
 package com.example.ui
 
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -15,13 +18,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.LocalDrink
 import androidx.compose.material.icons.filled.School
-import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -30,10 +30,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,15 +42,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.model.TodoTask
 import com.example.ui.health.HealthPlannerScreen
 import com.example.ui.journal.JournalScreen
 import com.example.ui.navigation.NavigationScreen
+import com.example.ui.review.WeeklyReviewScreen
 import com.example.ui.secretary.SecretaryDashboardScreen
 import com.example.ui.theme.WaterCyan
 import com.example.ui.todo.TodoListScreen
@@ -64,9 +63,18 @@ fun AppMainScreen(
 ) {
     var currentScreen by remember { mutableStateOf(NavigationScreen.DASHBOARD) }
 
-    // Collect states
-    val todayHealth by viewModel.todayHealth.collectAsState()
-    val timerState by viewModel.timerState.collectAsState()
+    // Runtime Permission for Android 13+ (POST_NOTIFICATIONS)
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        // Graceful handling: notification alarms already handle exact/inexact fallback
+    }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     // BackHandler: If user is on a secondary screen and presses back, go to DASHBOARD
     if (currentScreen != NavigationScreen.DASHBOARD) {
@@ -196,6 +204,15 @@ fun AppMainScreen(
                 NavigationScreen.JOURNAL -> {
                     JournalScreen(
                         viewModel = viewModel
+                    )
+                }
+                NavigationScreen.REVIEW -> {
+                    WeeklyReviewScreen(
+                        viewModel = viewModel,
+                        onStartFocus = { task ->
+                            viewModel.startFocusSession(task.targetMinutes, task, "${task.subjectTag} 專注")
+                            currentScreen = NavigationScreen.TODO
+                        }
                     )
                 }
             }

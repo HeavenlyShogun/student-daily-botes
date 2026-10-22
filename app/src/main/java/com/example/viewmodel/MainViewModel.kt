@@ -4,16 +4,23 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.db.AppDatabase
+import com.example.data.engine.SecretaryDecisionEngine
+import com.example.data.engine.SecretaryPlanResult
+import com.example.data.model.AiPlanProposal
 import com.example.data.model.DailyHealthLog
 import com.example.data.model.DailyJournalEntry
 import com.example.data.model.DefaultPresets
+import com.example.data.model.FixedScheduleItem
 import com.example.data.model.JournalMood
 import com.example.data.model.Priority
+import com.example.data.model.ProposalAction
 import com.example.data.model.ReminderStage
 import com.example.data.model.RoutinePreset
 import com.example.data.model.SubTask
 import com.example.data.model.TodoTask
+import com.example.data.model.WeeklyReviewMetrics
 import com.example.data.repository.StudentLifeRepository
+import com.example.notification.AlarmScheduler
 import com.example.ui.util.FeedbackManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -23,7 +30,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Locale
 
 data class FocusTimerUiState(
     val isRunning: Boolean = false,
@@ -47,6 +56,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val activeTasks: StateFlow<List<TodoTask>> = repository.activeTasks
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val allFixedSchedules: StateFlow<List<FixedScheduleItem>> = repository.allFixedSchedules
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val todayHealth: StateFlow<DailyHealthLog?> = repository.getTodayHealthLog()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
@@ -60,6 +72,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val activePreset: StateFlow<RoutinePreset> = repository.activePreset
+
+    // Weekly Metrics
+    private val _weeklyMetrics = MutableStateFlow(WeeklyReviewMetrics())
+    val weeklyMetrics: StateFlow<WeeklyReviewMetrics> = _weeklyMetrics.asStateFlow()
 
     // Timer State
     private val _timerState = MutableStateFlow(FocusTimerUiState())
@@ -77,11 +93,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _aiJournalFeedback = MutableStateFlow<String?>(null)
     val aiJournalFeedback: StateFlow<String?> = _aiJournalFeedback.asStateFlow()
 
+    // Safe AI Proposal State (Awaiting explicit user confirmation)
+    private val _pendingAiProposal = MutableStateFlow<AiPlanProposal?>(null)
+    val pendingAiProposal: StateFlow<AiPlanProposal?> = _pendingAiProposal.asStateFlow()
+
+    init {
+        refreshWeeklyMetrics()
+    }
+
+    fun refreshWeeklyMetrics() {
+        viewModelScope.launch {
+            _weeklyMetrics.value = repository.getWeeklyReviewMetrics()
+        }
+    }
+
     // Health actions (Immediate local database persistence)
     fun addWater(amountMl: Int) {
         viewModelScope.launch {
             repository.addWater(amountMl)
             feedbackManager.playStartSound()
+            refreshWeeklyMetrics()
         }
     }
 
@@ -90,13 +121,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logSleep(hours: Float, bedtime: String, wakeTime: String) {
-        viewModelScope.launch { repository.logSleep(hours, bedtime, wakeTime) }
+        viewModelScope.launch {
+            repository.logSleep(hours, bedtime, wakeTime)
+            refreshWeeklyMetrics()
+        }
     }
 
     fun logExercise(minutes: Int, type: String) {
         viewModelScope.launch {
             repository.logExercise(minutes, type)
             feedbackManager.playCompleteSound()
+            refreshWeeklyMetrics()
         }
     }
 
@@ -116,6 +151,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectPreset(preset: RoutinePreset) {
         repository.setRoutinePreset(preset)
+    }
+
+    // Fixed Schedule actions
+    fun addFixedSchedule(title: String, startTime: String, endTime: String, category: String, notes: String = "") {
+        viewModelScope.launch {
+            val item = FixedScheduleItem(
+                title = title,
+                startTime = startTime,
+                endTime = endTime,
+                category = category,
+                notes = notes
+            )
+            repository.addFixedSchedule(item)
+        }
+    }
+
+    fun deleteFixedSchedule(item: FixedScheduleItem) {
+        viewModelScope.launch {
+            repository.deleteFixedSchedule(item)
+        }
     }
 
     // Task actions
@@ -143,8 +198,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 dueDate = dueDate,
                 dueTime = dueTime
             )
-            repository.addTask(task)
+            val generatedId = repository.addTask(task)
+            val savedTask = task.copy(id = generatedId)
+            scheduleAlarmForTask(savedTask)
             feedbackManager.playStartSound()
+            refreshWeeklyMetrics()
         }
     }
 
@@ -153,7 +211,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repository.toggleTaskCompletion(task)
             if (!task.isCompleted) {
                 feedbackManager.playCompleteSound()
+                AlarmScheduler.cancelTaskReminders(getApplication(), task.id)
+            } else {
+                scheduleAlarmForTask(task)
             }
+            refreshWeeklyMetrics()
         }
     }
 
@@ -161,6 +223,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.toggleSubTask(taskId, subTaskId)
             feedbackManager.playStartSound()
+            refreshWeeklyMetrics()
         }
     }
 
@@ -180,16 +243,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.advanceMicroStep(task)
             feedbackManager.playCompleteSound()
+            refreshWeeklyMetrics()
         }
     }
 
     fun deleteTask(task: TodoTask) {
-        viewModelScope.launch { repository.deleteTask(task) }
+        viewModelScope.launch {
+            AlarmScheduler.cancelTaskReminders(getApplication(), task.id)
+            repository.deleteTask(task)
+            refreshWeeklyMetrics()
+        }
     }
 
     fun updateTaskReminderStage(task: TodoTask, stage: ReminderStage) {
         viewModelScope.launch {
             repository.updateTask(task.copy(reminderStage = stage))
+        }
+    }
+
+    private fun scheduleAlarmForTask(task: TodoTask) {
+        if (task.isCompleted || task.dueDate.isBlank() || task.dueTime.isBlank()) return
+        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+        val dueStr = "${task.dueDate} ${task.dueTime}"
+        val dueEpoch = try {
+            sdf.parse(dueStr)?.time
+        } catch (_: Exception) {
+            null
+        } ?: return
+
+        val now = System.currentTimeMillis()
+        val gentleEpoch = dueEpoch - 30 * 60 * 1000L
+        if (gentleEpoch > now) {
+            AlarmScheduler.scheduleTaskReminder(getApplication(), task, ReminderStage.GENTLE, gentleEpoch)
+        }
+        val focusEpoch = dueEpoch - 5 * 60 * 1000L
+        if (focusEpoch > now) {
+            AlarmScheduler.scheduleTaskReminder(getApplication(), task, ReminderStage.FOCUS, focusEpoch)
+        }
+        if (dueEpoch > now) {
+            AlarmScheduler.scheduleTaskReminder(getApplication(), task, ReminderStage.OVERDUE, dueEpoch)
         }
     }
 
@@ -216,6 +308,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             repository.saveJournalEntry(entry)
             feedbackManager.playCompleteSound()
+            refreshWeeklyMetrics()
         }
     }
 
@@ -275,6 +368,100 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setAmbientSound(sound: String) {
         _timerState.value = _timerState.value.copy(ambientSound = sound)
+    }
+
+    // Decision Engine Daily Plan Calculation
+    fun getDailyPlanResult(bufferMinutes: Int = 10): SecretaryPlanResult {
+        return SecretaryDecisionEngine.generateDailyPlan(
+            fixedSchedules = allFixedSchedules.value,
+            tasks = activeTasks.value,
+            healthLog = todayHealth.value,
+            bufferPerTaskMinutes = bufferMinutes
+        )
+    }
+
+    // Safe AI Secretary Optimization Proposal (Requires User Confirmation)
+    fun proposeAiPlanOptimization() {
+        viewModelScope.launch {
+            _isAiLoading.value = true
+            val plan = getDailyPlanResult()
+            if (plan.isOverloaded) {
+                val actions = plan.unallocatedTasks.map { task ->
+                    ProposalAction(
+                        taskId = task.id,
+                        taskTitle = task.title,
+                        actionType = "POSTPONE_TO_WEEKEND",
+                        description = "建議將此任務順延至週末自習時段，確保今晚 ${plan.bedtimeRecommendation} 準時入睡！",
+                        newDueDate = null,
+                        newDueTime = "14:00"
+                    )
+                }
+                _pendingAiProposal.value = AiPlanProposal(
+                    title = "AI 秘書護眠抗超載調適方案",
+                    rationale = "今日夜間可支配專注時段不足 ${plan.deficitMinutes} 分鐘。為守護黃金睡眠與記憶固化，秘書建議將超載任務順延。請檢閱並確認是否套用：",
+                    proposedActions = actions
+                )
+            } else {
+                val firstTask = activeTasks.value.firstOrNull { it.microSteps.isEmpty() }
+                if (firstTask != null) {
+                    val stepsResult = repository.decomposeTaskWithAi(firstTask.title, firstTask.subjectTag)
+                    val steps = stepsResult.getOrDefault(emptyList())
+                    _pendingAiProposal.value = AiPlanProposal(
+                        title = "AI 秘書 5 分鐘抗拖延微步建議",
+                        rationale = "針對重點任務「${firstTask.title}」，已規劃出 3~4 個超低阻力微步。請確認是否注入為該任務的微步啟動清單：",
+                        proposedActions = listOf(
+                            ProposalAction(
+                                taskId = firstTask.id,
+                                taskTitle = firstTask.title,
+                                actionType = "SPLIT_MICROSTEPS",
+                                description = "注入 5 分鐘微步啟動步驟 (${steps.size} 個)",
+                                microStepsToAdd = steps
+                            )
+                        )
+                    )
+                } else {
+                    _pendingAiProposal.value = AiPlanProposal(
+                        title = "今日計畫平衡狀態優良",
+                        rationale = "目前所有任務均在黃金睡眠時段內妥善配置，並保留充足緩衝。維持目前節奏即可！",
+                        proposedActions = emptyList()
+                    )
+                }
+            }
+            _isAiLoading.value = false
+        }
+    }
+
+    fun confirmApplyAiProposal(proposal: AiPlanProposal) {
+        viewModelScope.launch {
+            for (action in proposal.proposedActions) {
+                val task = allTasks.value.find { it.id == action.taskId }
+                if (task != null) {
+                    when (action.actionType) {
+                        "SPLIT_MICROSTEPS" -> {
+                            val updated = task.copy(
+                                microSteps = action.microStepsToAdd,
+                                currentMicroStepIndex = 0
+                            )
+                            repository.updateTask(updated)
+                        }
+                        "POSTPONE_TO_WEEKEND" -> {
+                            val updated = task.copy(
+                                postponeCount = task.postponeCount + 1,
+                                reminderStage = ReminderStage.GENTLE
+                            )
+                            repository.updateTask(updated)
+                        }
+                    }
+                }
+            }
+            _pendingAiProposal.value = null
+            feedbackManager.playCompleteSound()
+            refreshWeeklyMetrics()
+        }
+    }
+
+    fun dismissAiProposal() {
+        _pendingAiProposal.value = null
     }
 
     // AI Services (Gemini Integration)

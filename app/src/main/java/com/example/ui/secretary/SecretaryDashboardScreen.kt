@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -47,7 +48,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import com.example.data.engine.PlannedBlock
+import com.example.data.model.AiPlanProposal
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -87,8 +91,19 @@ fun SecretaryDashboardScreen(
     val timerState by viewModel.timerState.collectAsState()
     val isAiLoading by viewModel.isAiLoading.collectAsState()
     val aiConsultationText by viewModel.aiConsultationText.collectAsState()
+    val pendingAiProposal by viewModel.pendingAiProposal.collectAsState()
 
     val currentHealth = todayHealth ?: DailyHealthLog(date = "")
+    val dailyPlan = viewModel.getDailyPlanResult()
+
+    // Safe AI Confirmation Dialog: Changes only take effect upon explicit user confirmation
+    if (pendingAiProposal != null) {
+        AiProposalConfirmationDialog(
+            proposal = pendingAiProposal!!,
+            onConfirm = { viewModel.confirmApplyAiProposal(it) },
+            onDismiss = { viewModel.dismissAiProposal() }
+        )
+    }
 
     LazyColumn(
         modifier = modifier
@@ -158,6 +173,17 @@ fun SecretaryDashboardScreen(
                 onToggleMeal = { viewModel.toggleMeal(it) },
                 onToggleWindDown = { viewModel.toggleScreenWindDown() },
                 onGoToHealth = onNavigateToHealth
+            )
+        }
+
+        // Decision Engine: Real Student Daily Plan & Buffers
+        item {
+            DailyDynamicPlanSection(
+                planResult = dailyPlan,
+                allTasks = allTasks,
+                onProposeAiOptimization = { viewModel.proposeAiPlanOptimization() },
+                onStartFocus = onStartFocus,
+                isAiLoading = isAiLoading
             )
         }
 
@@ -1075,3 +1101,256 @@ fun ScienceStudyTipCard() {
         }
     }
 }
+
+@Composable
+fun DailyDynamicPlanSection(
+    planResult: com.example.data.engine.SecretaryPlanResult,
+    allTasks: List<TodoTask>,
+    onProposeAiOptimization: () -> Unit,
+    onStartFocus: (TodoTask) -> Unit,
+    isAiLoading: Boolean
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("daily_plan_card"),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "今日科學時間配置與緩衝",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "課堂 · 課後待辦 · 10分抗疲勞緩衝 · 護眠邊界",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Button(
+                    onClick = onProposeAiOptimization,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.tertiary
+                    ),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    enabled = !isAiLoading
+                ) {
+                    if (isAiLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), color = Color.White)
+                    } else {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("AI 智能調適", fontSize = 11.sp)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Deficit explanation or success banner
+            if (planResult.isOverloaded) {
+                OutlinedCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.outlinedCardColors(containerColor = WarningOrange.copy(alpha = 0.08f))
+                ) {
+                    Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.Top) {
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = WarningOrange, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = planResult.deficitExplanation ?: "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            lineHeight = 18.sp
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                planResult.plannedBlocks.forEach { block ->
+                    val matchedTask = block.taskId?.let { id -> allTasks.find { it.id == id } }
+                    PlannedBlockRow(
+                        block = block,
+                        onFocusTask = {
+                            if (matchedTask != null) {
+                                onStartFocus(matchedTask)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PlannedBlockRow(
+    block: PlannedBlock,
+    onFocusTask: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = when (block.category) {
+            "FIXED" -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+            "BUFFER" -> ExerciseEmerald.copy(alpha = 0.12f)
+            "WIND_DOWN" -> SleepPurple.copy(alpha = 0.15f)
+            "SLEEP" -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+            else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${block.startTime} ~ ${block.endTime}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(block.colorHex)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "(${block.durationMinutes}分)",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    text = block.title,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = block.subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            if (block.category == "TASK" && block.taskId != null && !block.isCompleted) {
+                Button(
+                    onClick = onFocusTask,
+                    shape = RoundedCornerShape(6.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(12.dp))
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Text("專注", fontSize = 10.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AiProposalConfirmationDialog(
+    proposal: AiPlanProposal,
+    onConfirm: (AiPlanProposal) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = proposal.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = proposal.rationale,
+                    style = MaterialTheme.typography.bodyMedium,
+                    lineHeight = 20.sp
+                )
+                if (proposal.proposedActions.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "擬執行調適項目 (確認後寫入資料庫)：",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    proposal.proposedActions.forEach { action ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp)) {
+                                Text(
+                                    text = "• ${action.taskTitle}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = action.description,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (action.microStepsToAdd.isNotEmpty()) {
+                                    action.microStepsToAdd.forEach { step ->
+                                        Text(
+                                            text = "  ↳ $step",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(proposal) },
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) {
+                Text("確認套用建議")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("暫時保留")
+            }
+        }
+    )
+}
+

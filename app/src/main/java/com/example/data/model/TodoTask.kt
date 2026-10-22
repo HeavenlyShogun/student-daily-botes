@@ -27,6 +27,10 @@ data class TodoTask(
     val isCompleted: Boolean = false,
     val dueDate: String = "",
     val dueTime: String = "",
+    val postponeCount: Int = 0, // 延期次數追蹤 (反覆延期分析)
+    val scheduledSlotStart: String = "", // 秘書建議時段開始 (例如 "19:00")
+    val scheduledSlotEnd: String = "",   // 秘書建議時段結束 (例如 "19:45")
+    val reminderMinutesBefore: Int = 15, // 溫和預先提醒時間 (分鐘)
     val completedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis()
 ) {
@@ -45,13 +49,16 @@ data class TodoTask(
 
     val totalSubTasksCount: Int
         get() = subTasks.size
+
+    val isRecurringDelayed: Boolean
+        get() = postponeCount >= 2
 }
 
-enum class Priority(val label: String, val badgeColorHex: Long) {
-    HIGH_URGENT("重要且緊急", 0xFFEF4444),
-    HIGH_NOT_URGENT("重要不緊急", 0xFF3B82F6),
-    NORMAL("一般待辦", 0xFF10B981),
-    LOW("瑣事備忘", 0xFF6B7280)
+enum class Priority(val label: String, val badgeColorHex: Long, val weight: Int) {
+    HIGH_URGENT("重要且緊急", 0xFFEF4444, 4),
+    HIGH_NOT_URGENT("重要不緊急", 0xFF3B82F6, 3),
+    NORMAL("一般待辦", 0xFF10B981, 2),
+    LOW("瑣事備忘", 0xFF6B7280, 1)
 }
 
 enum class ReminderStage(val label: String, val tip: String) {

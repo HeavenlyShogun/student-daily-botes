@@ -4,13 +4,17 @@ import com.example.data.ai.GeminiSecretaryService
 import com.example.data.db.AppDatabase
 import com.example.data.model.DailyHealthLog
 import com.example.data.model.DailyJournalEntry
+import com.example.data.model.DayCompletionStat
+import com.example.data.model.DefaultFixedSchedules
 import com.example.data.model.DefaultPresets
+import com.example.data.model.FixedScheduleItem
 import com.example.data.model.JournalMood
 import com.example.data.model.Priority
 import com.example.data.model.ReminderStage
 import com.example.data.model.RoutinePreset
 import com.example.data.model.SubTask
 import com.example.data.model.TodoTask
+import com.example.data.model.WeeklyReviewMetrics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -21,6 +25,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -29,6 +34,7 @@ class StudentLifeRepository(private val database: AppDatabase) {
     private val todoDao = database.todoDao()
     private val healthDao = database.healthDao()
     private val journalDao = database.journalDao()
+    private val fixedScheduleDao = database.fixedScheduleDao()
     val aiService = GeminiSecretaryService()
 
     private val _activePreset = MutableStateFlow<RoutinePreset>(DefaultPresets.REGULAR_SCHOOL_DAY)
@@ -47,6 +53,7 @@ class StudentLifeRepository(private val database: AppDatabase) {
 
     val allTasks: Flow<List<TodoTask>> = todoDao.getAllTasks()
     val activeTasks: Flow<List<TodoTask>> = todoDao.getActiveTasks()
+    val allFixedSchedules: Flow<List<FixedScheduleItem>> = fixedScheduleDao.getAllFixedSchedules()
 
     fun getTodayHealthLog(date: String = getTodayDateString()): Flow<DailyHealthLog?> {
         return healthDao.getHealthLogByDate(date)
@@ -215,6 +222,123 @@ class StudentLifeRepository(private val database: AppDatabase) {
         journalDao.insertOrUpdate(entry)
     }
 
+    // Fixed Schedule Operations
+    suspend fun addFixedSchedule(schedule: FixedScheduleItem): Long = withContext(Dispatchers.IO) {
+        fixedScheduleDao.insertSchedule(schedule)
+    }
+
+    suspend fun deleteFixedSchedule(schedule: FixedScheduleItem) = withContext(Dispatchers.IO) {
+        fixedScheduleDao.deleteSchedule(schedule)
+    }
+
+    suspend fun getAllFixedSchedulesSync(): List<FixedScheduleItem> = withContext(Dispatchers.IO) {
+        fixedScheduleDao.getAllFixedSchedulesSync()
+    }
+
+    // Weekly Review Analytics (Distinguishing Unlogged vs Incomplete)
+    suspend fun getWeeklyReviewMetrics(): WeeklyReviewMetrics = withContext(Dispatchers.IO) {
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val dayLabelFormat = SimpleDateFormat("E", Locale.TAIWAN)
+        val cal = Calendar.getInstance()
+
+        val past7Days = (6 downTo 0).map { daysAgo ->
+            val c = cal.clone() as Calendar
+            c.add(Calendar.DAY_OF_YEAR, -daysAgo)
+            val dStr = sdf.format(c.time)
+            val lStr = dayLabelFormat.format(c.time)
+            dStr to lStr
+        }
+
+        val allTasksList = todoDao.getAllTasks().first()
+        val dailyStatsList = mutableListOf<DayCompletionStat>()
+        var loggedDays = 0
+        var unloggedDays = 0
+        var totalSleepSum = 0f
+        var totalExercise = 0
+        var journalDays = 0
+
+        for ((dateStr, label) in past7Days) {
+            val tasksForDay = allTasksList.filter { it.dueDate == dateStr }
+            val completedCount = tasksForDay.count { it.isCompleted }
+            val totalCount = tasksForDay.size
+
+            val health = healthDao.getHealthLogByDateSync(dateStr)
+            val isSleepLogged = health != null && health.sleepHours > 0f
+            val isExerciseLogged = health != null
+
+            if (health != null) {
+                loggedDays++
+                if (health.sleepHours > 0f) totalSleepSum += health.sleepHours
+                totalExercise += health.exerciseMinutes
+            } else {
+                unloggedDays++
+            }
+
+            val journal = journalDao.getJournalEntryByDateSync(dateStr)
+            if (journal != null && journal.goodThing1.isNotBlank()) {
+                journalDays++
+            }
+
+            dailyStatsList.add(
+                DayCompletionStat(
+                    date = dateStr,
+                    dayOfWeekLabel = label,
+                    completedTasks = completedCount,
+                    totalTasks = totalCount,
+                    sleepHours = health?.sleepHours,
+                    isSleepLogged = isSleepLogged,
+                    exerciseMinutes = health?.exerciseMinutes ?: 0,
+                    isExerciseLogged = isExerciseLogged
+                )
+            )
+        }
+
+        val recurringDelayed = allTasksList.filter { it.postponeCount >= 2 || it.isRecurringDelayed }
+        val totalTasks = allTasksList.size
+        val completedTasks = allTasksList.count { it.isCompleted }
+        val completionRate = if (totalTasks > 0) (completedTasks * 100 / totalTasks) else 100
+        val avgSleep = if (loggedDays > 0) (totalSleepSum / loggedDays) else 7.5f
+
+        val executiveSummary = buildString {
+            append("本週任務完成率達 $completionRate%，已完成 $completedTasks 項學習待辦。")
+            if (recurringDelayed.isNotEmpty()) {
+                append(" ⚠️ 偵測到 ${recurringDelayed.size} 項反覆延期（延期2次以上）的卡關任務。")
+            }
+            if (unloggedDays > 0) {
+                append(" 本週有 $unloggedDays 天尚未記錄生理數據（未記錄 ≠ 未達成）。")
+            }
+            if (avgSleep < 7.0f) {
+                append(" 平均睡眠時數僅 ${String.format("%.1f", avgSleep)} 小時，累積了輕微睡眠債。")
+            } else {
+                append(" 平均睡眠達 ${String.format("%.1f", avgSleep)} 小時，大腦神經修復良好！")
+            }
+        }
+
+        val adviceAction = when {
+            recurringDelayed.isNotEmpty() ->
+                "💡 針對反覆延期的「${recurringDelayed.first().title}」，請嘗試開啟「5分鐘微步拆解」，降低啟動阻力！"
+            avgSleep < 7.0f ->
+                "💡 睡眠是記憶穩固的黃金基石，今晚請將就寢時間提前 30 分鐘，嚴守 23:00 就寢邊界。"
+            else ->
+                "💡 節律維持優異！保持每段專注間留有 10~15 分鐘放鬆緩衝，避免認知疲乏過載。"
+        }
+
+        WeeklyReviewMetrics(
+            totalTasksCount = totalTasks,
+            completedTasksCount = completedTasks,
+            completionRatePercent = completionRate,
+            avgSleepHours = avgSleep,
+            loggedHealthDays = loggedDays,
+            unloggedHealthDays = unloggedDays,
+            totalExerciseMinutes = totalExercise,
+            journaledDaysCount = journalDays,
+            dailyStats = dailyStatsList,
+            recurringDelayedTasks = recurringDelayed,
+            executiveSummary = executiveSummary,
+            adviceAction = adviceAction
+        )
+    }
+
     // AI Services
     suspend fun decomposeTaskWithAi(title: String, subject: String): Result<List<String>> {
         return aiService.decomposeTask(title, subject)
@@ -238,6 +362,10 @@ class StudentLifeRepository(private val database: AppDatabase) {
     private suspend fun seedInitialDataIfNeeded() {
         val existingTasks = todoDao.getAllTasks().first()
         val today = getTodayDateString()
+
+        if (fixedScheduleDao.getAllFixedSchedulesSync().isEmpty()) {
+            fixedScheduleDao.insertSchedules(DefaultFixedSchedules.DEFAULTS)
+        }
 
         if (existingTasks.isEmpty()) {
             val sampleTasks = listOf(
