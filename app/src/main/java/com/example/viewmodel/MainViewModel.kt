@@ -42,7 +42,9 @@ data class FocusTimerUiState(
     val activeTaskId: Long? = null,
     val activeTaskTitle: String? = null,
     val modeName: String = "標準番茄鐘 (25分)",
-    val ambientSound: String = "白噪音 (雨聲)"
+    val ambientSound: String = FeedbackManager.SOUND_RAIN,
+    val isAmbientPlaying: Boolean = false,
+    val ambientVolume: Float = 0.45f
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -394,6 +396,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startFocusSession(minutes: Int, task: TodoTask? = null, modeName: String = "專注學習") {
         timerJob?.cancel()
         val totalSec = minutes * 60
+        val currentSound = _timerState.value.ambientSound
+        val currentVol = _timerState.value.ambientVolume
+        feedbackManager.playStartSound()
+        feedbackManager.setAmbientSoundVolume(currentVol)
+        feedbackManager.startAmbientSound(currentSound)
+
         _timerState.value = FocusTimerUiState(
             isRunning = true,
             isPaused = false,
@@ -402,9 +410,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             activeTaskId = task?.id,
             activeTaskTitle = task?.title,
             modeName = modeName,
-            ambientSound = _timerState.value.ambientSound
+            ambientSound = currentSound,
+            isAmbientPlaying = feedbackManager.isAmbientPlaying,
+            ambientVolume = currentVol
         )
-        feedbackManager.playStartSound()
 
         timerJob = viewModelScope.launch {
             while (_timerState.value.remainingSeconds > 0) {
@@ -413,12 +422,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val remaining = _timerState.value.remainingSeconds - 1
                     _timerState.value = _timerState.value.copy(remainingSeconds = remaining)
                     if (remaining == 0) {
+                        feedbackManager.stopAmbientSound()
                         feedbackManager.playCompleteSound()
                         val completedMins = _timerState.value.totalSeconds / 60
                         _timerState.value.activeTaskId?.let { taskId ->
                             repository.addFocusMinutesToTask(taskId, completedMins)
                         }
-                        _timerState.value = _timerState.value.copy(isRunning = false, isPaused = false)
+                        _timerState.value = _timerState.value.copy(
+                            isRunning = false,
+                            isPaused = false,
+                            isAmbientPlaying = false
+                        )
                     }
                 }
             }
@@ -427,12 +441,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun togglePauseTimer() {
         val current = _timerState.value
-        _timerState.value = current.copy(isPaused = !current.isPaused)
+        if (!current.isRunning) {
+            // 若尚未啟動計時，點擊即啟動當前模式的專注計時與環境音
+            startFocusSession(
+                minutes = (current.totalSeconds / 60).coerceAtLeast(1),
+                task = null,
+                modeName = current.modeName
+            )
+            return
+        }
+        val willPause = !current.isPaused
+        if (willPause) {
+            feedbackManager.pauseAmbientSound()
+        } else {
+            feedbackManager.resumeAmbientSound(current.ambientSound)
+        }
+        _timerState.value = current.copy(
+            isPaused = willPause,
+            isAmbientPlaying = feedbackManager.isAmbientPlaying
+        )
         feedbackManager.playPauseSound()
     }
 
     fun stopTimer() {
         timerJob?.cancel()
+        feedbackManager.stopAmbientSound()
         val spentSeconds = _timerState.value.totalSeconds - _timerState.value.remainingSeconds
         if (spentSeconds >= 60 && _timerState.value.activeTaskId != null) {
             val mins = spentSeconds / 60
@@ -440,12 +473,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 repository.addFocusMinutesToTask(_timerState.value.activeTaskId!!, mins)
             }
         }
-        _timerState.value = _timerState.value.copy(isRunning = false, isPaused = false)
+        _timerState.value = _timerState.value.copy(
+            isRunning = false,
+            isPaused = false,
+            isAmbientPlaying = false
+        )
         feedbackManager.playPauseSound()
     }
 
     fun setAmbientSound(sound: String) {
-        _timerState.value = _timerState.value.copy(ambientSound = sound)
+        val current = _timerState.value
+        if (sound == FeedbackManager.SOUND_MUTE) {
+            feedbackManager.stopAmbientSound()
+        } else if (current.isRunning && !current.isPaused) {
+            feedbackManager.startAmbientSound(sound)
+        } else if (current.isAmbientPlaying) {
+            feedbackManager.startAmbientSound(sound)
+        }
+        _timerState.value = current.copy(
+            ambientSound = sound,
+            isAmbientPlaying = feedbackManager.isAmbientPlaying
+        )
+    }
+
+    fun setAmbientVolume(volume: Float) {
+        val clamped = volume.coerceIn(0f, 1f)
+        feedbackManager.setAmbientSoundVolume(clamped)
+        _timerState.value = _timerState.value.copy(ambientVolume = clamped)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        timerJob?.cancel()
+        feedbackManager.release()
     }
 
     // Decision Engine Daily Plan Calculation

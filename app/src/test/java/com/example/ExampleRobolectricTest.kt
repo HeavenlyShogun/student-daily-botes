@@ -586,6 +586,52 @@ class ExampleRobolectricTest {
         assertEquals(expectedTomorrowOverdue, tomorrowPlan.stageTriggers[ReminderStage.OVERDUE])
         assertTrue(AlarmScheduler.hasScheduledReminder(context, taskId, ReminderStage.OVERDUE))
     }
+
+    @Test
+    fun `verify feedback manager continuous looping ambient audio wav synthesis and lifecycle`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val feedbackManager = com.example.ui.util.FeedbackManager(context)
+
+        // 1. Verify all 3 ambient soundscapes generate valid RIFF WAVE files
+        val rainFile = feedbackManager.ensureAmbientWavFile(com.example.ui.util.FeedbackManager.SOUND_RAIN)
+        val studyFile = feedbackManager.ensureAmbientWavFile(com.example.ui.util.FeedbackManager.SOUND_STUDY_ROOM)
+        val forestFile = feedbackManager.ensureAmbientWavFile(com.example.ui.util.FeedbackManager.SOUND_FOREST_BREEZE)
+
+        assertTrue(rainFile.exists() && rainFile.length() > 44L)
+        assertTrue(studyFile.exists() && studyFile.length() > 44L)
+        assertTrue(forestFile.exists() && forestFile.length() > 44L)
+
+        // Verify RIFF header
+        val header = ByteArray(4)
+        rainFile.inputStream().use { it.read(header) }
+        assertEquals("RIFF", String(header, Charsets.US_ASCII))
+
+        // 2. Verify start, track switch, pause, resume, volume, and mute lifecycle
+        feedbackManager.startAmbientSound(com.example.ui.util.FeedbackManager.SOUND_RAIN)
+        assertTrue(feedbackManager.isAmbientPlaying)
+        assertEquals(com.example.ui.util.FeedbackManager.SOUND_RAIN, feedbackManager.currentAmbientSound)
+
+        feedbackManager.startAmbientSound(com.example.ui.util.FeedbackManager.SOUND_FOREST_BREEZE)
+        assertTrue(feedbackManager.isAmbientPlaying)
+        assertEquals(com.example.ui.util.FeedbackManager.SOUND_FOREST_BREEZE, feedbackManager.currentAmbientSound)
+
+        feedbackManager.pauseAmbientSound()
+        assertFalse(feedbackManager.isAmbientPlaying)
+
+        feedbackManager.resumeAmbientSound()
+        assertTrue(feedbackManager.isAmbientPlaying)
+        assertEquals(com.example.ui.util.FeedbackManager.SOUND_FOREST_BREEZE, feedbackManager.currentAmbientSound)
+
+        feedbackManager.setAmbientSoundVolume(0.75f)
+        assertEquals(0.75f, feedbackManager.ambientVolume, 0.01f)
+
+        feedbackManager.startAmbientSound(com.example.ui.util.FeedbackManager.SOUND_MUTE)
+        assertFalse(feedbackManager.isAmbientPlaying)
+        assertEquals(com.example.ui.util.FeedbackManager.SOUND_MUTE, feedbackManager.currentAmbientSound)
+
+        feedbackManager.release()
+    }
 }
+
 
 

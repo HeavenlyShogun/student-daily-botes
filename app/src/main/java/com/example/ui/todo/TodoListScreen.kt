@@ -275,7 +275,8 @@ fun TodoListScreen(
                 viewModel.stopTimer()
                 showTimerModal = false
             },
-            onSelectAmbientSound = { viewModel.setAmbientSound(it) }
+            onSelectAmbientSound = { viewModel.setAmbientSound(it) },
+            onSelectAmbientVolume = { viewModel.setAmbientVolume(it) }
         )
     }
 }
@@ -1407,7 +1408,8 @@ fun FocusTimerDialog(
     onStartNewSession: (Int, String) -> Unit,
     onTogglePause: () -> Unit,
     onStop: () -> Unit,
-    onSelectAmbientSound: (String) -> Unit
+    onSelectAmbientSound: (String) -> Unit,
+    onSelectAmbientVolume: (Float) -> Unit = {}
 ) {
     val sounds = listOf("白噪音 (雨聲)", "寧靜自習室", "森林微風", "靜音")
 
@@ -1458,6 +1460,28 @@ fun FocusTimerDialog(
                     letterSpacing = 2.sp
                 )
 
+                // Live MediaPlayer Ambient Audio Status Indicator
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (timerState.isAmbientPlaying)
+                        SuccessGreen.copy(alpha = 0.14f)
+                    else
+                        MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Text(
+                        text = when {
+                            timerState.ambientSound == "靜音" -> "🔇 環境音已設為靜音"
+                            timerState.isAmbientPlaying -> "🔊 持續循環播放中：${timerState.ambientSound}"
+                            timerState.isPaused -> "⏸️ 環境音已暫停：${timerState.ambientSound}"
+                            else -> "🎧 就緒：開始專注後自動循環播放「${timerState.ambientSound}」"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (timerState.isAmbientPlaying) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+
                 // Timer Controls
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(
@@ -1467,16 +1491,24 @@ fun FocusTimerDialog(
                             containerColor = MaterialTheme.colorScheme.primary
                         )
                     ) {
-                        Text(if (timerState.isPaused) "繼續專注" else "暫停")
-                    }
-                    Button(
-                        onClick = onStop,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
+                        Text(
+                            when {
+                                !timerState.isRunning -> "開始專注計時"
+                                timerState.isPaused -> "繼續專注"
+                                else -> "暫停"
+                            }
                         )
-                    ) {
-                        Text("提早結束")
+                    }
+                    if (timerState.isRunning) {
+                        Button(
+                            onClick = onStop,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Text("提早結束")
+                        }
                     }
                 }
 
@@ -1503,7 +1535,7 @@ fun FocusTimerDialog(
                 }
 
                 // Ambient Sound selector
-                Text(text = "環境專注音效意境：", style = MaterialTheme.typography.labelSmall)
+                Text(text = "環境專注音效意境 (MediaPlayer 無縫循環)：", style = MaterialTheme.typography.labelSmall)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(sounds) { s ->
                         FilterChip(
@@ -1511,6 +1543,22 @@ fun FocusTimerDialog(
                             onClick = { onSelectAmbientSound(s) },
                             label = { Text(s, fontSize = 11.sp) }
                         )
+                    }
+                }
+
+                if (timerState.ambientSound != "靜音") {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(text = "背景音量：", style = MaterialTheme.typography.labelSmall)
+                        listOf(0.25f to "輕柔", 0.45f to "適中", 0.75f to "沉浸").forEach { (vol, label) ->
+                            FilterChip(
+                                selected = kotlin.math.abs(timerState.ambientVolume - vol) < 0.05f,
+                                onClick = { onSelectAmbientVolume(vol) },
+                                label = { Text(label, fontSize = 10.sp) }
+                            )
+                        }
                     }
                 }
             }
