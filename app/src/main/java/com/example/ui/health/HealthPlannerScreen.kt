@@ -62,6 +62,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -78,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.DailyHealthLog
 import com.example.data.model.DefaultPresets
+import com.example.data.model.FixedScheduleItem
 import com.example.data.model.RoutinePreset
 import com.example.data.model.ScheduleBlock
 import com.example.ui.theme.DangerRed
@@ -95,8 +97,10 @@ fun HealthPlannerScreen(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
-    val currentHealth = viewModel.todayHealth.value ?: DailyHealthLog(date = "")
-    val activePreset = viewModel.activePreset.value
+    val todayHealthState by viewModel.todayHealth.collectAsState()
+    val currentHealth = todayHealthState ?: DailyHealthLog(date = "")
+    val activePreset by viewModel.activePreset.collectAsState()
+    val fixedSchedules by viewModel.allFixedSchedules.collectAsState()
 
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabTitles = listOf("睡眠與作息", "飲食與水分", "運動與伸展", "模組作息表")
@@ -106,6 +110,9 @@ fun HealthPlannerScreen(
 
     // Exercise logging dialog
     var showExerciseDialog by remember { mutableStateOf(false) }
+
+    // Fixed schedule dialog
+    var showAddFixedScheduleDialog by remember { mutableStateOf(false) }
 
     // Interactive stretch guide modal
     var activeStretchGuide by remember { mutableStateOf<StretchRoutine?>(null) }
@@ -254,6 +261,92 @@ fun HealthPlannerScreen(
                     }
                 }
                 3 -> {
+                    // Fixed Schedule Management (School, Commute, Cram School)
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "固定課表、通勤與補習時段",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "秘書決策引擎將優先保護以下固定行程，並於空檔安排自習與提醒",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Button(
+                                        onClick = { showAddFixedScheduleDialog = true },
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("新增行程", fontSize = 11.sp)
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                fixedSchedules.forEach { item ->
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surface,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 3.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                                .fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = "${item.startTime} ~ ${item.endTime}  ${item.title}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                Text(
+                                                    text = "類型：${item.category}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    fontSize = 10.sp
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = { viewModel.deleteFixedSchedule(item) },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Delete Fixed Schedule",
+                                                    modifier = Modifier.size(16.dp),
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Modular routine presets
                     item {
                         PresetSelectorCard(
@@ -274,6 +367,76 @@ fun HealthPlannerScreen(
                 }
             }
         }
+    }
+
+    // Add Fixed Schedule Dialog
+    if (showAddFixedScheduleDialog) {
+        var schedTitle by remember { mutableStateOf("") }
+        var schedStart by remember { mutableStateOf("18:30") }
+        var schedEnd by remember { mutableStateOf("20:30") }
+        var schedCategory by remember { mutableStateOf("CRAM_SCHOOL") }
+        val categoryOptions = listOf(
+            "CRAM_SCHOOL" to "補習/晚自習",
+            "SCHOOL" to "學校課程",
+            "COMMUTE" to "交通通勤",
+            "CLUB" to "社團/運動"
+        )
+
+        AlertDialog(
+            onDismissRequest = { showAddFixedScheduleDialog = false },
+            title = { Text("新增固定課表或補習行程", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = schedTitle,
+                        onValueChange = { schedTitle = it },
+                        label = { Text("行程名稱 (例如：週三數學加強補習)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = schedStart,
+                            onValueChange = { schedStart = it },
+                            label = { Text("開始 (HH:mm)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = schedEnd,
+                            onValueChange = { schedEnd = it },
+                            label = { Text("結束 (HH:mm)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(categoryOptions) { (code, label) ->
+                            FilterChip(
+                                selected = schedCategory == code,
+                                onClick = { schedCategory = code },
+                                label = { Text(label, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (schedTitle.isNotBlank()) {
+                            viewModel.addFixedSchedule(schedTitle.trim(), schedStart.trim(), schedEnd.trim(), schedCategory)
+                            showAddFixedScheduleDialog = false
+                        }
+                    },
+                    enabled = schedTitle.isNotBlank()
+                ) {
+                    Text("儲存並重排計畫")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddFixedScheduleDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 
     // Sleep logging dialog

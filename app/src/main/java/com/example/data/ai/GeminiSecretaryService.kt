@@ -36,8 +36,15 @@ class GeminiSecretaryService {
             ""
         }
 
+    /**
+     * 使用者可隨時關閉雲端 AI 傳送（最小化傳送與可退出機制）。
+     * 關閉時所有拆解、健康與日記回饋均 100% 在本機離線規則引擎完成，不傳送任何個人資料。
+     */
+    @Volatile
+    var isCloudAiAllowed: Boolean = true
+
     val isApiKeyConfigured: Boolean
-        get() = apiKey.isNotBlank() && apiKey != "MY_GEMINI_API_KEY"
+        get() = isCloudAiAllowed && apiKey.isNotBlank() && apiKey != "MY_GEMINI_API_KEY"
 
     /**
      * 1. 課業任務智慧 5 分鐘微步拆解 (5-Minute Task Micro-stepping)

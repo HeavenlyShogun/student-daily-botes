@@ -971,6 +971,23 @@ fun DashboardTaskItem(
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1
                 )
+                if (task.scheduledSlotStart.isNotBlank() || task.dueTime.isNotBlank()) {
+                    val slotInfo = buildString {
+                        if (task.scheduledSlotStart.isNotBlank()) {
+                            append("建議排程 ${task.scheduledSlotStart}-${task.scheduledSlotEnd}")
+                        }
+                        if (task.dueTime.isNotBlank()) {
+                            if (isNotEmpty()) append(" · ")
+                            append("截止 ${task.dueTime}")
+                        }
+                    }
+                    Text(
+                        text = slotInfo,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 10.sp
+                    )
+                }
             }
             Button(
                 onClick = onStartFocus,

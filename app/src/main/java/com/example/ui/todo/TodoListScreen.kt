@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -66,6 +67,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -75,6 +77,7 @@ import com.example.data.model.Priority
 import com.example.data.model.ReminderStage
 import com.example.data.model.SubTask
 import com.example.data.model.TodoTask
+import com.example.notification.AlarmScheduler
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningOrange
@@ -95,7 +98,8 @@ fun TodoListScreen(
 
     // Dialog state
     var showAddTaskDialog by remember { mutableStateOf(false) }
-    var taskForProcrastinationBuster by remember { mutableStateOf<TodoTask?>(null) }
+    var taskForEdit by remember { mutableStateOf<TodoTask?>(null) }
+    var taskIdForProcrastinationBuster by remember { mutableStateOf<Long?>(null) }
     var showTimerModal by remember { mutableStateOf(false) }
     var taskForAddSubTask by remember { mutableStateOf<TodoTask?>(null) }
 
@@ -171,9 +175,10 @@ fun TodoListScreen(
                             viewModel.startFocusSession(task.targetMinutes, task, "${task.subjectTag} 專注")
                             showTimerModal = true
                         },
-                        onOpenProcrastinationBuster = { taskForProcrastinationBuster = task },
+                        onOpenProcrastinationBuster = { taskIdForProcrastinationBuster = task.id },
                         onAdvanceMicroStep = { viewModel.advanceMicroStep(task) },
                         onUpdateReminderStage = { stage -> viewModel.updateTaskReminderStage(task, stage) },
+                        onEdit = { taskForEdit = task },
                         onDelete = { viewModel.deleteTask(task) }
                     )
                 }
@@ -188,6 +193,7 @@ fun TodoListScreen(
     // Add Task Dialog (with AI decomposition)
     if (showAddTaskDialog) {
         AddTaskDialog(
+            defaultDueDate = viewModel.getTodayDateString(),
             isAiLoading = isAiLoading,
             onDismiss = { showAddTaskDialog = false },
             onDecomposeWithAi = { title, subject, onResult ->
@@ -196,6 +202,27 @@ fun TodoListScreen(
             onSave = { title, desc, subject, priority, targetMin, microSteps, subTasks, dueDate, dueTime ->
                 viewModel.addTask(title, desc, subject, priority, targetMin, microSteps, subTasks, dueDate, dueTime)
                 showAddTaskDialog = false
+            }
+        )
+    }
+
+    // Edit / Reschedule Task Dialog
+    taskForEdit?.let { editingTask ->
+        EditTaskDialog(
+            task = editingTask,
+            onDismiss = { taskForEdit = null },
+            onSave = { title, desc, subject, priority, targetMin, dueDate, dueTime ->
+                viewModel.updateTaskDetails(
+                    task = editingTask,
+                    title = title,
+                    description = desc,
+                    subject = subject,
+                    priority = priority,
+                    targetMinutes = targetMin,
+                    dueDate = dueDate,
+                    dueTime = dueTime
+                )
+                taskForEdit = null
             }
         )
     }
@@ -212,15 +239,16 @@ fun TodoListScreen(
         )
     }
 
-    // 5-Minute Procrastination Buster Modal
-    taskForProcrastinationBuster?.let { task ->
+    // 5-Minute Procrastination Buster Modal (always observes latest task from StateFlow)
+    val liveBusterTask = tasks.find { it.id == taskIdForProcrastinationBuster }
+    liveBusterTask?.let { task ->
         ProcrastinationBusterDialog(
             task = task,
             isAiLoading = isAiLoading,
-            onDismiss = { taskForProcrastinationBuster = null },
+            onDismiss = { taskIdForProcrastinationBuster = null },
             onAiDecompose = {
                 viewModel.decomposeTaskWithAi(task.title, task.subjectTag) { newSteps ->
-                    viewModel.updateTaskReminderStage(task, ReminderStage.FOCUS)
+                    viewModel.updateTaskMicroSteps(task, newSteps)
                 }
             },
             onAdvanceMicroStep = {
@@ -228,7 +256,7 @@ fun TodoListScreen(
             },
             onStart5MinSession = {
                 viewModel.startFocusSession(5, task, "5分鐘微步啟動")
-                taskForProcrastinationBuster = null
+                taskIdForProcrastinationBuster = null
                 showTimerModal = true
             }
         )
@@ -254,6 +282,10 @@ fun TodoListScreen(
 
 @Composable
 fun SteppedReminderBanner() {
+    val context = LocalContext.current
+    val notificationsEnabled = remember(context) { AlarmScheduler.areNotificationsEnabled(context) }
+    val exactAlarmsAllowed = remember(context) { AlarmScheduler.canScheduleExactAlarms(context) }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -262,20 +294,43 @@ fun SteppedReminderBanner() {
         )
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.NotificationsActive,
-                    contentDescription = "Stepped Reminder",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "三階動態提醒機制：降低認知負荷",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.NotificationsActive,
+                        contentDescription = "Stepped Reminder",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "三階動態提醒機制：降低認知負荷",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (notificationsEnabled && exactAlarmsAllowed) SuccessGreen.copy(alpha = 0.15f) else WarningOrange.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = when {
+                            !notificationsEnabled -> "通知權限未開啟"
+                            !exactAlarmsAllowed -> "省電彈性鬧鐘"
+                            else -> "精準排程就緒"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (notificationsEnabled && exactAlarmsAllowed) SuccessGreen else WarningOrange,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        fontSize = 10.sp
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
@@ -445,6 +500,7 @@ fun TaskCard(
     onOpenProcrastinationBuster: () -> Unit,
     onAdvanceMicroStep: () -> Unit,
     onUpdateReminderStage: (ReminderStage) -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     var expandedStages by remember { mutableStateOf(false) }
@@ -548,24 +604,45 @@ fun TaskCard(
 
                     if (task.dueDate.isNotBlank()) {
                         Spacer(modifier = Modifier.height(2.dp))
+                        val slotInfo = if (task.scheduledSlotStart.isNotBlank() && task.scheduledSlotEnd.isNotBlank()) {
+                            "建議排程：${task.scheduledSlotStart}-${task.scheduledSlotEnd} · "
+                        } else ""
+                        val postponeInfo = if (task.postponeCount > 0) " · 已延後 ${task.postponeCount} 次" else ""
                         Text(
-                            text = "預計期限：${task.dueDate} ${task.dueTime}",
+                            text = "${slotInfo}預計期限：${task.dueDate} ${task.dueTime}$postponeInfo",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
                         )
                     }
                 }
 
-                IconButton(
-                    onClick = onDelete,
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier.size(18.dp)
-                    )
+                Row {
+                    IconButton(
+                        onClick = onEdit,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("edit_task_${task.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit Task",
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f),
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("delete_task_${task.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
 
@@ -835,6 +912,7 @@ fun EmptyTaskStateCard(onAddTask: () -> Unit) {
 // Dialogs: Add Task, Add Subtask, Procrastination Buster, and Focus Timer
 @Composable
 fun AddTaskDialog(
+    defaultDueDate: String,
     isAiLoading: Boolean,
     onDismiss: () -> Unit,
     onDecomposeWithAi: (String, String, (List<String>) -> Unit) -> Unit,
@@ -845,6 +923,8 @@ fun AddTaskDialog(
     var subject by remember { mutableStateOf("數學") }
     var priority by remember { mutableStateOf(Priority.HIGH_URGENT) }
     var targetMin by remember { mutableIntStateOf(25) }
+    var dueDate by remember { mutableStateOf(defaultDueDate) }
+    var dueTime by remember { mutableStateOf("20:30") }
     var microStep1 by remember { mutableStateOf("") }
     var microStep2 by remember { mutableStateOf("") }
     var microStep3 by remember { mutableStateOf("") }
@@ -872,7 +952,9 @@ fun AddTaskDialog(
                         value = title,
                         onValueChange = { title = it },
                         label = { Text("任務標題 (例如：物理力學講義P.30)") },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("add_task_title_input")
                     )
                 }
 
@@ -923,12 +1005,41 @@ fun AddTaskDialog(
                 }
                 item {
                     Text(text = "優先級 (四象限)：", style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Priority.values().take(3).forEach { p ->
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(Priority.values()) { p ->
                             FilterChip(
                                 selected = priority == p,
                                 onClick = { priority = p },
                                 label = { Text(p.label, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+                item {
+                    Text(text = "預計完成日期與截止時間：", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = dueDate,
+                            onValueChange = { dueDate = it },
+                            label = { Text("日期 (yyyy-MM-dd)") },
+                            modifier = Modifier.weight(1.2f),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = dueTime,
+                            onValueChange = { dueTime = it },
+                            label = { Text("時間 (HH:mm)") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
+                        )
+                    }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(listOf("19:30", "20:30", "21:30", "22:00")) { t ->
+                            FilterChip(
+                                selected = dueTime == t,
+                                onClick = { dueTime = t },
+                                label = { Text(t, fontSize = 11.sp) }
                             )
                         }
                     }
@@ -984,14 +1095,131 @@ fun AddTaskDialog(
                 onClick = {
                     if (title.isNotBlank()) {
                         val steps = listOf(microStep1, microStep2, microStep3).filter { it.isNotBlank() }
-                        // Automatically initialize corresponding subtasks if microsteps are provided
                         val subTasks = steps.map { SubTask(title = it, isCompleted = false) }
-                        onSave(title, desc, subject, priority, targetMin, steps, subTasks, "", "")
+                        onSave(title, desc, subject, priority, targetMin, steps, subTasks, dueDate.trim(), dueTime.trim())
+                    }
+                },
+                enabled = title.isNotBlank(),
+                modifier = Modifier.testTag("confirm_add_task_button")
+            ) {
+                Text("建立待辦")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+fun EditTaskDialog(
+    task: TodoTask,
+    onDismiss: () -> Unit,
+    onSave: (String, String, String, Priority, Int, String, String) -> Unit
+) {
+    var title by remember(task.id) { mutableStateOf(task.title) }
+    var desc by remember(task.id) { mutableStateOf(task.description) }
+    var subject by remember(task.id) { mutableStateOf(task.subjectTag) }
+    var priority by remember(task.id) { mutableStateOf(task.priority) }
+    var targetMin by remember(task.id) { mutableIntStateOf(task.targetMinutes) }
+    var dueDate by remember(task.id) { mutableStateOf(task.dueDate) }
+    var dueTime by remember(task.id) { mutableStateOf(task.dueTime) }
+
+    val subjectOptions = listOf("數學", "英文", "國文", "自然", "社會", "生活", "大考複習")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("修改或改期任務 (同步更新排程與鬧鐘)", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item {
+                    OutlinedTextField(
+                        value = title,
+                        onValueChange = { title = it },
+                        label = { Text("任務標題") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = desc,
+                        onValueChange = { desc = it },
+                        label = { Text("備註 / 具體範圍") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                item {
+                    Text(text = "學科 / 分類：", style = MaterialTheme.typography.labelMedium)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(subjectOptions) { s ->
+                            FilterChip(
+                                selected = subject == s,
+                                onClick = { subject = s },
+                                label = { Text(s, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+                item {
+                    Text(text = "優先級：", style = MaterialTheme.typography.labelMedium)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(Priority.values()) { p ->
+                            FilterChip(
+                                selected = priority == p,
+                                onClick = { priority = p },
+                                label = { Text(p.label, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+                item {
+                    Text(text = "預計完成日期與截止時間：", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = dueDate,
+                            onValueChange = { dueDate = it },
+                            label = { Text("日期 (yyyy-MM-dd)") },
+                            modifier = Modifier.weight(1.2f),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = dueTime,
+                            onValueChange = { dueTime = it },
+                            label = { Text("時間 (HH:mm)") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
+                        )
+                    }
+                }
+                item {
+                    Text(text = "預估專注時間：$targetMin 分鐘", style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(15, 25, 45, 60).forEach { mins ->
+                            FilterChip(
+                                selected = targetMin == mins,
+                                onClick = { targetMin = mins },
+                                label = { Text("${mins}分", fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (title.isNotBlank()) {
+                        onSave(title.trim(), desc.trim(), subject, priority, targetMin, dueDate.trim(), dueTime.trim())
                     }
                 },
                 enabled = title.isNotBlank()
             ) {
-                Text("建立待辦")
+                Text("儲存變更")
             }
         },
         dismissButton = {

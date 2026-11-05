@@ -11,11 +11,65 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TodoDao {
-    @Query("SELECT * FROM todo_tasks ORDER BY isCompleted ASC, priority ASC, id DESC")
+    @Query(
+        """
+        SELECT * FROM todo_tasks
+        ORDER BY
+            isCompleted ASC,
+            CASE priority
+                WHEN 'HIGH_URGENT' THEN 1
+                WHEN 'HIGH_NOT_URGENT' THEN 2
+                WHEN 'NORMAL' THEN 3
+                WHEN 'LOW' THEN 4
+                ELSE 5
+            END ASC,
+            CASE WHEN dueDate = '' THEN '9999-12-31' ELSE dueDate END ASC,
+            CASE WHEN dueTime = '' THEN '23:59' ELSE dueTime END ASC,
+            postponeCount DESC,
+            id DESC
+        """
+    )
     fun getAllTasks(): Flow<List<TodoTask>>
 
-    @Query("SELECT * FROM todo_tasks WHERE isCompleted = 0 ORDER BY priority ASC, id DESC")
+    @Query(
+        """
+        SELECT * FROM todo_tasks
+        WHERE isCompleted = 0
+        ORDER BY
+            CASE priority
+                WHEN 'HIGH_URGENT' THEN 1
+                WHEN 'HIGH_NOT_URGENT' THEN 2
+                WHEN 'NORMAL' THEN 3
+                WHEN 'LOW' THEN 4
+                ELSE 5
+            END ASC,
+            CASE WHEN dueDate = '' THEN '9999-12-31' ELSE dueDate END ASC,
+            CASE WHEN dueTime = '' THEN '23:59' ELSE dueTime END ASC,
+            postponeCount DESC,
+            id DESC
+        """
+    )
     fun getActiveTasks(): Flow<List<TodoTask>>
+
+    @Query(
+        """
+        SELECT * FROM todo_tasks
+        WHERE isCompleted = 0
+        ORDER BY
+            CASE priority
+                WHEN 'HIGH_URGENT' THEN 1
+                WHEN 'HIGH_NOT_URGENT' THEN 2
+                WHEN 'NORMAL' THEN 3
+                WHEN 'LOW' THEN 4
+                ELSE 5
+            END ASC,
+            CASE WHEN dueDate = '' THEN '9999-12-31' ELSE dueDate END ASC,
+            CASE WHEN dueTime = '' THEN '23:59' ELSE dueTime END ASC,
+            postponeCount DESC,
+            id DESC
+        """
+    )
+    suspend fun getActiveTasksSync(): List<TodoTask>
 
     @Query("SELECT * FROM todo_tasks WHERE id = :id")
     suspend fun getTaskById(id: Long): TodoTask?

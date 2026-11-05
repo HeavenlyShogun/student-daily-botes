@@ -97,8 +97,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _pendingAiProposal = MutableStateFlow<AiPlanProposal?>(null)
     val pendingAiProposal: StateFlow<AiPlanProposal?> = _pendingAiProposal.asStateFlow()
 
+    // Personalization: Buffer minutes between tasks
+    private val _bufferPerTaskMinutes = MutableStateFlow(10)
+    val bufferPerTaskMinutes: StateFlow<Int> = _bufferPerTaskMinutes.asStateFlow()
+
+    // Privacy & Data Minimization: Cloud AI Opt-in/Opt-out toggle
+    private val _isCloudAiEnabled = MutableStateFlow(true)
+    val isCloudAiEnabled: StateFlow<Boolean> = _isCloudAiEnabled.asStateFlow()
+
     init {
         refreshWeeklyMetrics()
+        reconcilePlanAndAlarms()
+    }
+
+    fun setBufferPerTaskMinutes(minutes: Int) {
+        val clamped = minutes.coerceIn(5, 30)
+        _bufferPerTaskMinutes.value = clamped
+        viewModelScope.launch {
+            repository.reconcileDailyPlanAndAlarms(getApplication(), bufferPerTaskMinutes = clamped)
+        }
+    }
+
+    fun setCloudAiEnabled(enabled: Boolean) {
+        _isCloudAiEnabled.value = enabled
+        repository.aiService.isCloudAiAllowed = enabled
+    }
+
+    fun getTodayDateString(): String = repository.getTodayDateString()
+
+    fun reconcilePlanAndAlarms() {
+        viewModelScope.launch {
+            repository.reconcileDailyPlanAndAlarms(
+                getApplication(),
+                bufferPerTaskMinutes = _bufferPerTaskMinutes.value
+            )
+        }
+    }
+
+    fun getReminderPermissionStatus(): Pair<Boolean, Boolean> {
+        val ctx = getApplication<Application>()
+        return AlarmScheduler.areNotificationsEnabled(ctx) to AlarmScheduler.canScheduleExactAlarms(ctx)
     }
 
     fun refreshWeeklyMetrics() {
@@ -123,6 +161,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun logSleep(hours: Float, bedtime: String, wakeTime: String) {
         viewModelScope.launch {
             repository.logSleep(hours, bedtime, wakeTime)
+            repository.reconcileDailyPlanAndAlarms(getApplication())
             refreshWeeklyMetrics()
         }
     }
@@ -164,12 +203,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 notes = notes
             )
             repository.addFixedSchedule(item)
+            repository.reconcileDailyPlanAndAlarms(getApplication())
         }
     }
 
     fun deleteFixedSchedule(item: FixedScheduleItem) {
         viewModelScope.launch {
             repository.deleteFixedSchedule(item)
+            repository.reconcileDailyPlanAndAlarms(getApplication())
         }
     }
 
@@ -186,23 +227,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         dueTime: String = "20:00"
     ) {
         viewModelScope.launch {
+            val resolvedDueDate = dueDate.ifBlank { repository.getTodayDateString() }
+            val resolvedDueTime = dueTime.ifBlank { "20:00" }
             val task = TodoTask(
-                title = title,
-                description = description,
+                title = title.trim(),
+                description = description.trim(),
                 subjectTag = subject,
                 priority = priority,
                 reminderStage = ReminderStage.GENTLE,
                 targetMinutes = targetMinutes,
                 microSteps = microSteps,
                 subTasks = subTasks,
-                dueDate = dueDate,
-                dueTime = dueTime
+                dueDate = resolvedDueDate,
+                dueTime = resolvedDueTime
             )
-            val generatedId = repository.addTask(task)
-            val savedTask = task.copy(id = generatedId)
-            scheduleAlarmForTask(savedTask)
+            repository.addTask(task)
+            repository.reconcileDailyPlanAndAlarms(
+                getApplication(),
+                bufferPerTaskMinutes = _bufferPerTaskMinutes.value
+            )
             feedbackManager.playStartSound()
             refreshWeeklyMetrics()
+        }
+    }
+
+    fun updateTaskDetails(
+        task: TodoTask,
+        title: String,
+        description: String,
+        subject: String,
+        priority: Priority,
+        targetMinutes: Int,
+        dueDate: String,
+        dueTime: String
+    ) {
+        viewModelScope.launch {
+            AlarmScheduler.cancelTaskReminders(getApplication(), task.id)
+            val updated = task.copy(
+                title = title.trim(),
+                description = description.trim(),
+                subjectTag = subject,
+                priority = priority,
+                targetMinutes = targetMinutes.coerceIn(5, 120),
+                dueDate = dueDate.ifBlank { repository.getTodayDateString() },
+                dueTime = dueTime.ifBlank { "20:00" }
+            )
+            repository.updateTask(updated)
+            repository.reconcileDailyPlanAndAlarms(
+                getApplication(),
+                bufferPerTaskMinutes = _bufferPerTaskMinutes.value
+            )
+            feedbackManager.playStartSound()
+            refreshWeeklyMetrics()
+        }
+    }
+
+    fun updateTaskMicroSteps(task: TodoTask, microSteps: List<String>) {
+        viewModelScope.launch {
+            val cleaned = microSteps.map { it.trim() }.filter { it.isNotBlank() }
+            val updated = task.copy(
+                microSteps = cleaned,
+                currentMicroStepIndex = 0,
+                reminderStage = ReminderStage.FOCUS
+            )
+            repository.updateTask(updated)
+            AlarmScheduler.syncTaskReminders(getApplication(), updated)
         }
     }
 
@@ -212,9 +301,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (!task.isCompleted) {
                 feedbackManager.playCompleteSound()
                 AlarmScheduler.cancelTaskReminders(getApplication(), task.id)
-            } else {
-                scheduleAlarmForTask(task)
             }
+            repository.reconcileDailyPlanAndAlarms(getApplication())
             refreshWeeklyMetrics()
         }
     }
@@ -222,6 +310,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleSubTask(taskId: Long, subTaskId: String) {
         viewModelScope.launch {
             repository.toggleSubTask(taskId, subTaskId)
+            val updated = allTasks.value.find { it.id == taskId }
+            if (updated?.isCompleted == true) {
+                AlarmScheduler.cancelTaskReminders(getApplication(), taskId)
+            }
+            repository.reconcileDailyPlanAndAlarms(getApplication())
             feedbackManager.playStartSound()
             refreshWeeklyMetrics()
         }
@@ -230,18 +323,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun addSubTask(taskId: Long, title: String) {
         viewModelScope.launch {
             repository.addSubTask(taskId, title)
+            repository.reconcileDailyPlanAndAlarms(getApplication())
         }
     }
 
     fun deleteSubTask(taskId: Long, subTaskId: String) {
         viewModelScope.launch {
             repository.deleteSubTask(taskId, subTaskId)
+            repository.reconcileDailyPlanAndAlarms(getApplication())
         }
     }
 
     fun advanceMicroStep(task: TodoTask) {
         viewModelScope.launch {
             repository.advanceMicroStep(task)
+            if (task.currentMicroStepIndex + 1 >= task.microSteps.size) {
+                AlarmScheduler.cancelTaskReminders(getApplication(), task.id)
+            }
+            repository.reconcileDailyPlanAndAlarms(getApplication())
             feedbackManager.playCompleteSound()
             refreshWeeklyMetrics()
         }
@@ -251,37 +350,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             AlarmScheduler.cancelTaskReminders(getApplication(), task.id)
             repository.deleteTask(task)
+            repository.reconcileDailyPlanAndAlarms(getApplication())
             refreshWeeklyMetrics()
         }
     }
 
     fun updateTaskReminderStage(task: TodoTask, stage: ReminderStage) {
         viewModelScope.launch {
-            repository.updateTask(task.copy(reminderStage = stage))
-        }
-    }
-
-    private fun scheduleAlarmForTask(task: TodoTask) {
-        if (task.isCompleted || task.dueDate.isBlank() || task.dueTime.isBlank()) return
-        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-        val dueStr = "${task.dueDate} ${task.dueTime}"
-        val dueEpoch = try {
-            sdf.parse(dueStr)?.time
-        } catch (_: Exception) {
-            null
-        } ?: return
-
-        val now = System.currentTimeMillis()
-        val gentleEpoch = dueEpoch - 30 * 60 * 1000L
-        if (gentleEpoch > now) {
-            AlarmScheduler.scheduleTaskReminder(getApplication(), task, ReminderStage.GENTLE, gentleEpoch)
-        }
-        val focusEpoch = dueEpoch - 5 * 60 * 1000L
-        if (focusEpoch > now) {
-            AlarmScheduler.scheduleTaskReminder(getApplication(), task, ReminderStage.FOCUS, focusEpoch)
-        }
-        if (dueEpoch > now) {
-            AlarmScheduler.scheduleTaskReminder(getApplication(), task, ReminderStage.OVERDUE, dueEpoch)
+            val updated = task.copy(reminderStage = stage)
+            repository.updateTask(updated)
+            AlarmScheduler.syncTaskReminders(getApplication(), updated)
         }
     }
 
@@ -371,10 +449,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Decision Engine Daily Plan Calculation
-    fun getDailyPlanResult(bufferMinutes: Int = 10): SecretaryPlanResult {
+    fun getDailyPlanResult(bufferMinutes: Int = _bufferPerTaskMinutes.value): SecretaryPlanResult {
+        val today = repository.getTodayDateString()
+        val todayTasks = activeTasks.value.filter { it.dueDate.isBlank() || it.dueDate <= today }
         return SecretaryDecisionEngine.generateDailyPlan(
             fixedSchedules = allFixedSchedules.value,
-            tasks = activeTasks.value,
+            tasks = todayTasks,
             healthLog = todayHealth.value,
             bufferPerTaskMinutes = bufferMinutes
         )
@@ -385,15 +465,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isAiLoading.value = true
             val plan = getDailyPlanResult()
+            val tomorrowDate = repository.getTomorrowDateString()
             if (plan.isOverloaded) {
                 val actions = plan.unallocatedTasks.map { task ->
                     ProposalAction(
                         taskId = task.id,
                         taskTitle = task.title,
                         actionType = "POSTPONE_TO_WEEKEND",
-                        description = "建議將此任務順延至週末自習時段，確保今晚 ${plan.bedtimeRecommendation} 準時入睡！",
-                        newDueDate = null,
-                        newDueTime = "14:00"
+                        description = "建議將此任務順延至明日 ($tomorrowDate 20:00) 自習時段，確保今晚 ${plan.bedtimeRecommendation} 準時入睡！",
+                        newDueDate = tomorrowDate,
+                        newDueTime = "20:00"
                     )
                 }
                 _pendingAiProposal.value = AiPlanProposal(
@@ -445,9 +526,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             repository.updateTask(updated)
                         }
                         "POSTPONE_TO_WEEKEND" -> {
+                            AlarmScheduler.cancelTaskReminders(getApplication(), task.id)
                             val updated = task.copy(
                                 postponeCount = task.postponeCount + 1,
-                                reminderStage = ReminderStage.GENTLE
+                                reminderStage = ReminderStage.GENTLE,
+                                dueDate = action.newDueDate ?: repository.getTomorrowDateString(),
+                                dueTime = action.newDueTime ?: task.dueTime,
+                                scheduledSlotStart = "",
+                                scheduledSlotEnd = ""
                             )
                             repository.updateTask(updated)
                         }
@@ -455,6 +541,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             _pendingAiProposal.value = null
+            repository.reconcileDailyPlanAndAlarms(
+                getApplication(),
+                bufferPerTaskMinutes = _bufferPerTaskMinutes.value
+            )
             feedbackManager.playCompleteSound()
             refreshWeeklyMetrics()
         }

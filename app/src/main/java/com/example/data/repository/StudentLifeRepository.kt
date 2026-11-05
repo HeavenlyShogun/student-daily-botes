@@ -1,12 +1,16 @@
 package com.example.data.repository
 
+import android.content.Context
 import com.example.data.ai.GeminiSecretaryService
 import com.example.data.db.AppDatabase
+import com.example.data.engine.SecretaryDecisionEngine
+import com.example.data.engine.SecretaryPlanResult
 import com.example.data.model.DailyHealthLog
 import com.example.data.model.DailyJournalEntry
 import com.example.data.model.DayCompletionStat
 import com.example.data.model.DefaultFixedSchedules
 import com.example.data.model.DefaultPresets
+import com.example.notification.AlarmScheduler
 import com.example.data.model.FixedScheduleItem
 import com.example.data.model.JournalMood
 import com.example.data.model.Priority
@@ -49,6 +53,13 @@ class StudentLifeRepository(private val database: AppDatabase) {
     fun getTodayDateString(): String {
         val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         return sdf.format(Date())
+    }
+
+    fun getTomorrowDateString(): String {
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val cal = Calendar.getInstance()
+        cal.add(Calendar.DAY_OF_YEAR, 1)
+        return sdf.format(cal.time)
     }
 
     val allTasks: Flow<List<TodoTask>> = todoDao.getAllTasks()
@@ -233,6 +244,47 @@ class StudentLifeRepository(private val database: AppDatabase) {
 
     suspend fun getAllFixedSchedulesSync(): List<FixedScheduleItem> = withContext(Dispatchers.IO) {
         fixedScheduleDao.getAllFixedSchedulesSync()
+    }
+
+    /**
+     * Single source of truth reconciliation:
+     * 1. Computes today's daily plan via SecretaryDecisionEngine using fixed schedules, active tasks, and health log.
+     * 2. Updates `scheduledSlotStart` and `scheduledSlotEnd` in `todo_tasks` if changed.
+     * 3. Synchronizes Android AlarmManager reminders for all active tasks (cancelling stale alarms first).
+     */
+    suspend fun reconcileDailyPlanAndAlarms(
+        context: Context,
+        nowMillis: Long = System.currentTimeMillis(),
+        bufferPerTaskMinutes: Int = 10
+    ): SecretaryPlanResult = withContext(Dispatchers.IO) {
+        val today = getTodayDateString()
+        val fixedSchedules = fixedScheduleDao.getAllFixedSchedulesSync()
+        val activeTasksList = todoDao.getActiveTasksSync()
+        val todayTasks = activeTasksList.filter { it.dueDate.isBlank() || it.dueDate <= today }
+        val todayHealth = healthDao.getHealthLogByDateSync(today)
+
+        val plan = SecretaryDecisionEngine.generateDailyPlan(
+            fixedSchedules = fixedSchedules,
+            tasks = todayTasks,
+            healthLog = todayHealth,
+            bufferPerTaskMinutes = bufferPerTaskMinutes
+        )
+
+        for (task in activeTasksList) {
+            val slot = plan.scheduledSlotMap[task.id]
+            val newStart = slot?.first ?: ""
+            val newEnd = slot?.second ?: ""
+            val updatedTask = if (task.scheduledSlotStart != newStart || task.scheduledSlotEnd != newEnd) {
+                task.copy(scheduledSlotStart = newStart, scheduledSlotEnd = newEnd).also {
+                    todoDao.updateTask(it)
+                }
+            } else {
+                task
+            }
+            AlarmScheduler.syncTaskReminders(context, updatedTask, nowMillis)
+        }
+
+        plan
     }
 
     // Weekly Review Analytics (Distinguishing Unlogged vs Incomplete)

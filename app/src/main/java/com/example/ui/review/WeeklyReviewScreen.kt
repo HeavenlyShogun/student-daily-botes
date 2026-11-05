@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -36,12 +37,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -68,8 +69,12 @@ fun WeeklyReviewScreen(
     modifier: Modifier = Modifier
 ) {
     val weeklyMetrics by viewModel.weeklyMetrics.collectAsState()
-    var selectedBufferMinutes by remember { mutableIntStateOf(10) }
-    var selectedBedtime by remember { mutableStateOf("23:00") }
+    val selectedBufferMinutes by viewModel.bufferPerTaskMinutes.collectAsState()
+    val todayHealth by viewModel.todayHealth.collectAsState()
+    val isCloudAiEnabled by viewModel.isCloudAiEnabled.collectAsState()
+    var selectedBedtime by remember(todayHealth?.bedtime) {
+        mutableStateOf(todayHealth?.bedtime?.ifBlank { "23:00" } ?: "23:00")
+    }
 
     LaunchedEffect(Unit) {
         viewModel.refreshWeeklyMetrics()
@@ -356,7 +361,8 @@ fun WeeklyReviewScreen(
                                 color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .clickable { selectedBufferMinutes = mins }
+                                    .testTag("buffer_option_$mins")
+                                    .clickable { viewModel.setBufferPerTaskMinutes(mins) }
                             ) {
                                 Box(
                                     modifier = Modifier.padding(vertical = 8.dp),
@@ -395,7 +401,9 @@ fun WeeklyReviewScreen(
                                     .weight(1f)
                                     .clickable {
                                         selectedBedtime = time
-                                        viewModel.logSleep(7.5f, time, "06:45")
+                                        val currentSleepHours = todayHealth?.sleepHours ?: 7.5f
+                                        val currentWakeTime = todayHealth?.wakeTime?.ifBlank { "06:45" } ?: "06:45"
+                                        viewModel.logSleep(currentSleepHours, time, currentWakeTime)
                                     }
                             ) {
                                 Box(
@@ -412,6 +420,59 @@ fun WeeklyReviewScreen(
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // AI Privacy & Data Minimization Opt-Out Card (P2 Security & Privacy)
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Security,
+                                contentDescription = "AI Privacy",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "AI 秘書隱私與最小化傳送設定",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (isCloudAiEnabled)
+                                "目前啟用雲端 AI 輔助（僅傳送匿名摘要，不傳送完整私人日記；所有建議均需您確認後才執行）。"
+                            else
+                                "已切換為「100% 純本機規則引擎模式」，任何任務、健康與日記資料皆不會傳送至外部雲端。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = isCloudAiEnabled,
+                        onCheckedChange = { viewModel.setCloudAiEnabled(it) },
+                        modifier = Modifier.testTag("cloud_ai_privacy_switch")
+                    )
                 }
             }
         }
