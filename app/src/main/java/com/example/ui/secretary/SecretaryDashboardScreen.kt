@@ -64,9 +64,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.engine.MaslowPyramidEngine
 import com.example.data.model.DailyHealthLog
 import com.example.data.model.DailyJournalEntry
 import com.example.data.model.TodoTask
+import com.example.ui.components.MaslowNeedPyramidCard
 import com.example.ui.theme.ExerciseEmerald
 import com.example.ui.theme.SleepPurple
 import com.example.ui.theme.SuccessGreen
@@ -141,6 +143,20 @@ fun SecretaryDashboardScreen(
                 totalTasksCount = allTasks.size,
                 hasJournaled = journalEntry?.goodThing1?.isNotBlank() == true,
                 onViewDetails = onNavigateToHealth
+            )
+        }
+
+        // Maslow's Hierarchy of Needs Pyramid (生理生存基石 ➔ 自我實現金字塔)
+        item {
+            val maslowAssessment = MaslowPyramidEngine.evaluateMaslowPyramid(
+                healthLog = currentHealth,
+                tasks = allTasks,
+                journalEntry = journalEntry,
+                isPlanOverloaded = dailyPlan.isOverloaded
+            )
+            MaslowNeedPyramidCard(
+                assessment = maslowAssessment,
+                onNavigateToHealth = onNavigateToHealth
             )
         }
 

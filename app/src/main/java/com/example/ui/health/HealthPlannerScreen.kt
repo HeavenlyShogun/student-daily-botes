@@ -101,6 +101,8 @@ fun HealthPlannerScreen(
     val currentHealth = todayHealthState ?: DailyHealthLog(date = "")
     val activePreset by viewModel.activePreset.collectAsState()
     val fixedSchedules by viewModel.allFixedSchedules.collectAsState()
+    val selfMenuItems by viewModel.allSelfMenuItems.collectAsState()
+    val recommendedMeal by viewModel.recommendedMeal.collectAsState()
 
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabTitles = listOf("睡眠與作息", "飲食與水分", "運動與伸展", "模組作息表")
@@ -159,7 +161,20 @@ fun HealthPlannerScreen(
                     }
                 }
                 1 -> {
-                    // Diet & Hydration
+                    // Diet & Hydration + Personal Self-Menu with Tags
+                    item {
+                        SelfMenuDecisionSection(
+                            menuItems = selfMenuItems,
+                            recommendedMeal = recommendedMeal,
+                            onPickRandomMeal = { slot, tag -> viewModel.pickRandomSelfMenuItem(slot, tag) },
+                            onChooseMeal = { viewModel.chooseSelfMenuItem(it) },
+                            onToggleFavorite = { viewModel.toggleFavoriteSelfMenuItem(it) },
+                            onDeleteMeal = { viewModel.deleteSelfMenuItem(it) },
+                            onAddMeal = { name, slot, tags, note ->
+                                viewModel.addSelfMenuItem(name, slot, tags, note)
+                            }
+                        )
+                    }
                     item {
                         WaterIntakeTrackerCard(
                             currentMl = currentHealth.waterMl,

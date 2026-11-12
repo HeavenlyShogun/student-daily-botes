@@ -10,12 +10,14 @@ import com.example.data.model.DailyJournalEntry
 import com.example.data.model.DayCompletionStat
 import com.example.data.model.DefaultFixedSchedules
 import com.example.data.model.DefaultPresets
+import com.example.data.model.DefaultSelfMenu
 import com.example.notification.AlarmScheduler
 import com.example.data.model.FixedScheduleItem
 import com.example.data.model.JournalMood
 import com.example.data.model.Priority
 import com.example.data.model.ReminderStage
 import com.example.data.model.RoutinePreset
+import com.example.data.model.SelfMenuItem
 import com.example.data.model.SubTask
 import com.example.data.model.TodoTask
 import com.example.data.model.WeeklyReviewMetrics
@@ -39,6 +41,7 @@ class StudentLifeRepository(private val database: AppDatabase) {
     private val healthDao = database.healthDao()
     private val journalDao = database.journalDao()
     private val fixedScheduleDao = database.fixedScheduleDao()
+    private val selfMenuDao = database.selfMenuDao()
     val aiService = GeminiSecretaryService()
 
     private val _activePreset = MutableStateFlow<RoutinePreset>(DefaultPresets.REGULAR_SCHOOL_DAY)
@@ -65,6 +68,7 @@ class StudentLifeRepository(private val database: AppDatabase) {
     val allTasks: Flow<List<TodoTask>> = todoDao.getAllTasks()
     val activeTasks: Flow<List<TodoTask>> = todoDao.getActiveTasks()
     val allFixedSchedules: Flow<List<FixedScheduleItem>> = fixedScheduleDao.getAllFixedSchedules()
+    val allSelfMenuItems: Flow<List<SelfMenuItem>> = selfMenuDao.getAllMenuItems()
 
     fun getTodayHealthLog(date: String = getTodayDateString()): Flow<DailyHealthLog?> {
         return healthDao.getHealthLogByDate(date)
@@ -137,6 +141,31 @@ class StudentLifeRepository(private val database: AppDatabase) {
                 else -> log
             }
         }
+    }
+
+    // Self-Menu Operations (Custom Student Diet Menu with Tags)
+    suspend fun addSelfMenuItem(item: SelfMenuItem): Long = withContext(Dispatchers.IO) {
+        selfMenuDao.insertMenuItem(item)
+    }
+
+    suspend fun toggleFavoriteSelfMenuItem(item: SelfMenuItem) = withContext(Dispatchers.IO) {
+        selfMenuDao.updateMenuItem(item.copy(isFavorite = !item.isFavorite))
+    }
+
+    suspend fun chooseSelfMenuItem(item: SelfMenuItem) = withContext(Dispatchers.IO) {
+        selfMenuDao.updateMenuItem(item.copy(timesChosen = item.timesChosen + 1))
+        updateOrCreateHealthLog { log ->
+            when (item.mealSlot) {
+                "早餐" -> log.copy(breakfastLogged = true)
+                "午餐" -> log.copy(lunchLogged = true)
+                "晚餐" -> log.copy(dinnerLogged = true)
+                else -> log
+            }
+        }
+    }
+
+    suspend fun deleteSelfMenuItem(item: SelfMenuItem) = withContext(Dispatchers.IO) {
+        selfMenuDao.deleteMenuItem(item)
     }
 
     suspend fun toggleScreenWindDown() {
@@ -417,6 +446,10 @@ class StudentLifeRepository(private val database: AppDatabase) {
 
         if (fixedScheduleDao.getAllFixedSchedulesSync().isEmpty()) {
             fixedScheduleDao.insertSchedules(DefaultFixedSchedules.DEFAULTS)
+        }
+
+        if (selfMenuDao.getMenuCount() == 0) {
+            selfMenuDao.insertAllMenuItems(DefaultSelfMenu.DEFAULTS)
         }
 
         if (existingTasks.isEmpty()) {

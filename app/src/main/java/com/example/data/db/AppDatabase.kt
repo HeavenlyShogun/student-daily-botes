@@ -10,6 +10,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.model.DailyHealthLog
 import com.example.data.model.DailyJournalEntry
 import com.example.data.model.FixedScheduleItem
+import com.example.data.model.SelfMenuItem
 import com.example.data.model.TodoTask
 
 @Database(
@@ -17,9 +18,10 @@ import com.example.data.model.TodoTask
         TodoTask::class,
         DailyHealthLog::class,
         DailyJournalEntry::class,
-        FixedScheduleItem::class
+        FixedScheduleItem::class,
+        SelfMenuItem::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -28,6 +30,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun healthDao(): HealthDao
     abstract fun journalDao(): JournalDao
     abstract fun fixedScheduleDao(): FixedScheduleDao
+    abstract fun selfMenuDao(): SelfMenuDao
 
     companion object {
         @Volatile
@@ -61,6 +64,24 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS self_menu_items (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        mealSlot TEXT NOT NULL,
+                        tags TEXT NOT NULL DEFAULT '',
+                        brainBenefitNote TEXT NOT NULL DEFAULT '',
+                        isFavorite INTEGER NOT NULL DEFAULT 0,
+                        timesChosen INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -68,7 +89,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "student_secretary_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
                 INSTANCE = instance
                 instance
@@ -76,3 +97,4 @@ abstract class AppDatabase : RoomDatabase() {
         }
     }
 }
+

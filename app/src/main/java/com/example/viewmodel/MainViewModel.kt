@@ -16,6 +16,7 @@ import com.example.data.model.Priority
 import com.example.data.model.ProposalAction
 import com.example.data.model.ReminderStage
 import com.example.data.model.RoutinePreset
+import com.example.data.model.SelfMenuItem
 import com.example.data.model.SubTask
 import com.example.data.model.TodoTask
 import com.example.data.model.WeeklyReviewMetrics
@@ -60,6 +61,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val allFixedSchedules: StateFlow<List<FixedScheduleItem>> = repository.allFixedSchedules
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allSelfMenuItems: StateFlow<List<SelfMenuItem>> = repository.allSelfMenuItems
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _recommendedMeal = MutableStateFlow<SelfMenuItem?>(null)
+    val recommendedMeal: StateFlow<SelfMenuItem?> = _recommendedMeal.asStateFlow()
 
     val todayHealth: StateFlow<DailyHealthLog?> = repository.getTodayHealthLog()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
@@ -179,6 +186,85 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleMeal(meal: String) {
         viewModelScope.launch {
             repository.toggleMeal(meal)
+            feedbackManager.playStartSound()
+        }
+    }
+
+    // Self-Menu actions ("今天吃什麼" 不猶豫自我菜單)
+    fun addSelfMenuItem(
+        name: String,
+        mealSlot: String,
+        tags: List<String>,
+        brainBenefitNote: String
+    ) {
+        viewModelScope.launch {
+            val cleanedTags = tags.map { it.trim().removePrefix("#") }.filter { it.isNotBlank() }.distinct()
+            val item = SelfMenuItem(
+                name = name.trim(),
+                mealSlot = mealSlot,
+                tags = cleanedTags,
+                brainBenefitNote = brainBenefitNote.trim().ifBlank { "營養均衡搭配，穩定血糖並維持大腦高效專注。" }
+            )
+            repository.addSelfMenuItem(item)
+            feedbackManager.playStartSound()
+        }
+    }
+
+    fun toggleFavoriteSelfMenuItem(item: SelfMenuItem) {
+        viewModelScope.launch {
+            repository.toggleFavoriteSelfMenuItem(item)
+            feedbackManager.playStartSound()
+        }
+    }
+
+    fun chooseSelfMenuItem(item: SelfMenuItem) {
+        viewModelScope.launch {
+            repository.chooseSelfMenuItem(item)
+            _recommendedMeal.value = item.copy(timesChosen = item.timesChosen + 1)
+            feedbackManager.playCompleteSound()
+            refreshWeeklyMetrics()
+        }
+    }
+
+    fun deleteSelfMenuItem(item: SelfMenuItem) {
+        viewModelScope.launch {
+            if (_recommendedMeal.value?.id == item.id) {
+                _recommendedMeal.value = null
+            }
+            repository.deleteSelfMenuItem(item)
+        }
+    }
+
+    fun pickRandomSelfMenuItem(mealSlotFilter: String?, tagFilter: String?) {
+        val candidates = allSelfMenuItems.value.filter { item ->
+            (mealSlotFilter == null || item.mealSlot == mealSlotFilter) &&
+            (tagFilter == null || item.tags.contains(tagFilter))
+        }.ifEmpty { allSelfMenuItems.value }
+
+        if (candidates.isEmpty()) return
+
+        val currentId = _recommendedMeal.value?.id
+        val pool = if (candidates.size > 1 && currentId != null) {
+            candidates.filter { it.id != currentId }
+        } else {
+            candidates
+        }
+        _recommendedMeal.value = pool.random()
+        feedbackManager.playStartSound()
+    }
+
+    fun clearRecommendedMeal() {
+        _recommendedMeal.value = null
+    }
+
+    fun moveTaskPriority(task: TodoTask, newPriority: Priority) {
+        viewModelScope.launch {
+            val updated = task.copy(priority = newPriority)
+            repository.updateTask(updated)
+            repository.reconcileDailyPlanAndAlarms(
+                getApplication(),
+                bufferPerTaskMinutes = _bufferPerTaskMinutes.value
+            )
             feedbackManager.playStartSound()
         }
     }

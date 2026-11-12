@@ -77,7 +77,10 @@ import com.example.data.model.Priority
 import com.example.data.model.ReminderStage
 import com.example.data.model.SubTask
 import com.example.data.model.TodoTask
+import com.example.data.engine.MaslowPyramidEngine
 import com.example.notification.AlarmScheduler
+import com.example.ui.components.EisenhowerMatrixBoard
+import com.example.ui.components.MaslowNeedPyramidCard
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningOrange
@@ -89,8 +92,13 @@ fun TodoListScreen(
     modifier: Modifier = Modifier
 ) {
     val tasks by viewModel.allTasks.collectAsState()
+    val todayHealth by viewModel.todayHealth.collectAsState()
+    val todayJournal by viewModel.todayJournal.collectAsState()
     val timerState by viewModel.timerState.collectAsState()
     val isAiLoading by viewModel.isAiLoading.collectAsState()
+
+    // 0 = 動態待辦清單, 1 = 緊急與重要四象限規劃表, 2 = 馬斯洛生存與自我實現需求金字塔
+    var selectedPlanningViewMode by remember { mutableIntStateOf(0) }
 
     var selectedPriorityFilter by remember { mutableStateOf<Priority?>(null) }
     var selectedSubjectFilter by remember { mutableStateOf<String?>(null) }
@@ -98,6 +106,7 @@ fun TodoListScreen(
 
     // Dialog state
     var showAddTaskDialog by remember { mutableStateOf(false) }
+    var addTaskDefaultPriority by remember { mutableStateOf(Priority.HIGH_URGENT) }
     var taskForEdit by remember { mutableStateOf<TodoTask?>(null) }
     var taskIdForProcrastinationBuster by remember { mutableStateOf<Long?>(null) }
     var showTimerModal by remember { mutableStateOf(false) }
@@ -109,13 +118,29 @@ fun TodoListScreen(
         (!showOnlyIncomplete || !task.isCompleted)
     }
 
+    val dailyPlan = viewModel.getDailyPlanResult()
+    val eisenhowerQuadrants = remember(tasks) {
+        MaslowPyramidEngine.buildEisenhowerMatrix(tasks)
+    }
+    val maslowAssessment = remember(todayHealth, tasks, todayJournal, dailyPlan.isOverloaded) {
+        MaslowPyramidEngine.evaluateMaslowPyramid(
+            healthLog = todayHealth,
+            tasks = tasks,
+            journalEntry = todayJournal,
+            isPlanOverloaded = dailyPlan.isOverloaded
+        )
+    }
+
     Scaffold(
         modifier = modifier
             .fillMaxSize()
             .testTag("todo_list_screen"),
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { showAddTaskDialog = true },
+                onClick = {
+                    addTaskDefaultPriority = Priority.HIGH_URGENT
+                    showAddTaskDialog = true
+                },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
                 modifier = Modifier.testTag("add_task_fab")
@@ -146,41 +171,127 @@ fun TodoListScreen(
                 )
             }
 
-            // Filters & Dynamic Category selector
+            // Planning Mode Switcher: 動態清單 / 四象限規劃表 / 馬斯洛金字塔
             item {
-                TaskFilterSection(
-                    selectedPriority = selectedPriorityFilter,
-                    onSelectPriority = { selectedPriorityFilter = it },
-                    selectedSubject = selectedSubjectFilter,
-                    onSelectSubject = { selectedSubjectFilter = it },
-                    showOnlyIncomplete = showOnlyIncomplete,
-                    onToggleIncomplete = { showOnlyIncomplete = !showOnlyIncomplete }
-                )
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        val modes = listOf(
+                            0 to "📋 動態清單",
+                            1 to "⊞ 四象限規劃表",
+                            2 to "▲ 馬斯洛金字塔"
+                        )
+                        modes.forEach { (modeIndex, label) ->
+                            val isSelected = selectedPlanningViewMode == modeIndex
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { selectedPlanningViewMode = modeIndex }
+                                    .testTag("planning_mode_tab_$modeIndex")
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
-            // Task list items
-            if (filteredTasks.isEmpty()) {
-                item {
-                    EmptyTaskStateCard(onAddTask = { showAddTaskDialog = true })
+            when (selectedPlanningViewMode) {
+                1 -> {
+                    // 緊急與重要四象限規劃表 (Eisenhower 4-Quadrant Matrix)
+                    item {
+                        EisenhowerMatrixBoard(
+                            quadrants = eisenhowerQuadrants,
+                            onToggleComplete = { viewModel.toggleTaskCompletion(it) },
+                            onStartTimer = { task ->
+                                viewModel.startFocusSession(task.targetMinutes, task, "${task.subjectTag} 專注")
+                                showTimerModal = true
+                            },
+                            onMovePriority = { task, newPriority ->
+                                viewModel.moveTaskPriority(task, newPriority)
+                            },
+                            onAddTaskToQuadrant = { quadrantPriority ->
+                                addTaskDefaultPriority = quadrantPriority
+                                showAddTaskDialog = true
+                            }
+                        )
+                    }
                 }
-            } else {
-                items(filteredTasks, key = { it.id }) { task ->
-                    TaskCard(
-                        task = task,
-                        onToggleComplete = { viewModel.toggleTaskCompletion(task) },
-                        onToggleSubTask = { subTaskId -> viewModel.toggleSubTask(task.id, subTaskId) },
-                        onAddSubTaskClick = { taskForAddSubTask = task },
-                        onDeleteSubTask = { subTaskId -> viewModel.deleteSubTask(task.id, subTaskId) },
-                        onStartTimer = {
-                            viewModel.startFocusSession(task.targetMinutes, task, "${task.subjectTag} 專注")
-                            showTimerModal = true
-                        },
-                        onOpenProcrastinationBuster = { taskIdForProcrastinationBuster = task.id },
-                        onAdvanceMicroStep = { viewModel.advanceMicroStep(task) },
-                        onUpdateReminderStage = { stage -> viewModel.updateTaskReminderStage(task, stage) },
-                        onEdit = { taskForEdit = task },
-                        onDelete = { viewModel.deleteTask(task) }
-                    )
+                2 -> {
+                    // 馬斯洛生存與自我實現需求金字塔 (Maslow's Hierarchy of Needs Pyramid)
+                    item {
+                        MaslowNeedPyramidCard(
+                            assessment = maslowAssessment,
+                            onAddTaskForPriority = { priority ->
+                                addTaskDefaultPriority = priority
+                                showAddTaskDialog = true
+                            }
+                        )
+                    }
+                }
+                else -> {
+                    // Filters & Dynamic Category selector
+                    item {
+                        TaskFilterSection(
+                            selectedPriority = selectedPriorityFilter,
+                            onSelectPriority = { selectedPriorityFilter = it },
+                            selectedSubject = selectedSubjectFilter,
+                            onSelectSubject = { selectedSubjectFilter = it },
+                            showOnlyIncomplete = showOnlyIncomplete,
+                            onToggleIncomplete = { showOnlyIncomplete = !showOnlyIncomplete }
+                        )
+                    }
+
+                    // Task list items
+                    if (filteredTasks.isEmpty()) {
+                        item {
+                            EmptyTaskStateCard(onAddTask = {
+                                addTaskDefaultPriority = Priority.HIGH_URGENT
+                                showAddTaskDialog = true
+                            })
+                        }
+                    } else {
+                        items(filteredTasks, key = { it.id }) { task ->
+                            TaskCard(
+                                task = task,
+                                onToggleComplete = { viewModel.toggleTaskCompletion(task) },
+                                onToggleSubTask = { subTaskId -> viewModel.toggleSubTask(task.id, subTaskId) },
+                                onAddSubTaskClick = { taskForAddSubTask = task },
+                                onDeleteSubTask = { subTaskId -> viewModel.deleteSubTask(task.id, subTaskId) },
+                                onStartTimer = {
+                                    viewModel.startFocusSession(task.targetMinutes, task, "${task.subjectTag} 專注")
+                                    showTimerModal = true
+                                },
+                                onOpenProcrastinationBuster = { taskIdForProcrastinationBuster = task.id },
+                                onAdvanceMicroStep = { viewModel.advanceMicroStep(task) },
+                                onUpdateReminderStage = { stage -> viewModel.updateTaskReminderStage(task, stage) },
+                                onEdit = { taskForEdit = task },
+                                onDelete = { viewModel.deleteTask(task) }
+                            )
+                        }
+                    }
                 }
             }
 
@@ -194,6 +305,7 @@ fun TodoListScreen(
     if (showAddTaskDialog) {
         AddTaskDialog(
             defaultDueDate = viewModel.getTodayDateString(),
+            defaultPriority = addTaskDefaultPriority,
             isAiLoading = isAiLoading,
             onDismiss = { showAddTaskDialog = false },
             onDecomposeWithAi = { title, subject, onResult ->
@@ -914,6 +1026,7 @@ fun EmptyTaskStateCard(onAddTask: () -> Unit) {
 @Composable
 fun AddTaskDialog(
     defaultDueDate: String,
+    defaultPriority: Priority = Priority.HIGH_URGENT,
     isAiLoading: Boolean,
     onDismiss: () -> Unit,
     onDecomposeWithAi: (String, String, (List<String>) -> Unit) -> Unit,
@@ -922,7 +1035,7 @@ fun AddTaskDialog(
     var title by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
     var subject by remember { mutableStateOf("數學") }
-    var priority by remember { mutableStateOf(Priority.HIGH_URGENT) }
+    var priority by remember(defaultPriority) { mutableStateOf(defaultPriority) }
     var targetMin by remember { mutableIntStateOf(25) }
     var dueDate by remember { mutableStateOf(defaultDueDate) }
     var dueTime by remember { mutableStateOf("20:30") }

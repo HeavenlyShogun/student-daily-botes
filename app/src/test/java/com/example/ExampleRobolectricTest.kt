@@ -35,7 +35,7 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [36])
 class ExampleRobolectricTest {
 
     @Test
@@ -289,9 +289,10 @@ class ExampleRobolectricTest {
             """.trimIndent()
         )
 
-        // Apply sequential migrations v1 -> v2 -> v3
+        // Apply sequential migrations v1 -> v2 -> v3 -> v4
         AppDatabase.MIGRATION_1_2.migrate(sqliteDb)
         AppDatabase.MIGRATION_2_3.migrate(sqliteDb)
+        AppDatabase.MIGRATION_3_4.migrate(sqliteDb)
 
         // Verify v1 row survived and v2/v3 columns have expected defaults
         val cursor = sqliteDb.query(
@@ -317,6 +318,17 @@ class ExampleRobolectricTest {
         assertEquals("週三英文補習", schedCursor.getString(0))
         assertEquals("CRAM_SCHOOL", schedCursor.getString(1))
         schedCursor.close()
+
+        // Verify self_menu_items table created in MIGRATION_3_4 is writable
+        sqliteDb.execSQL(
+            "INSERT INTO self_menu_items (name, mealSlot, tags, brainBenefitNote, isFavorite, timesChosen) VALUES ('地瓜茶葉蛋早餐', '早餐', '低GI防昏睡|||便利商店可得', '穩定上午血糖', 1, 2)"
+        )
+        val menuCursor = sqliteDb.query("SELECT name, mealSlot, timesChosen FROM self_menu_items")
+        assertTrue(menuCursor.moveToFirst())
+        assertEquals("地瓜茶葉蛋早餐", menuCursor.getString(0))
+        assertEquals("早餐", menuCursor.getString(1))
+        assertEquals(2, menuCursor.getInt(2))
+        menuCursor.close()
 
         sqliteDb.close()
         context.deleteDatabase(dbName)
@@ -631,7 +643,79 @@ class ExampleRobolectricTest {
 
         feedbackManager.release()
     }
+
+    @Test
+    fun `verify Maslow pyramid 5-tier evaluation and Eisenhower 4-quadrant planning matrix`() {
+        val sampleTasks = listOf(
+            TodoTask(id = 1, title = "數學段考模考訂正", subjectTag = "數學", priority = Priority.HIGH_URGENT, targetMinutes = 40),
+            TodoTask(id = 2, title = "學測自然科跨章節錯題整理", subjectTag = "大考複習", priority = Priority.HIGH_NOT_URGENT, targetMinutes = 45, completedMinutes = 25),
+            TodoTask(id = 3, title = "繳交班費與社團回條", subjectTag = "生活", priority = Priority.NORMAL, targetMinutes = 10),
+            TodoTask(id = 4, title = "整理書桌抽屜舊考卷", subjectTag = "生活", priority = Priority.LOW, targetMinutes = 15, isCompleted = true)
+        )
+
+        // 1. Verify Eisenhower 4-Quadrant Matrix
+        val quadrants = com.example.data.engine.MaslowPyramidEngine.buildEisenhowerMatrix(sampleTasks)
+        assertEquals(4, quadrants.size)
+        assertEquals(Priority.HIGH_URGENT, quadrants[0].priority)
+        assertEquals(40, quadrants[0].totalTargetMinutes)
+        assertEquals(Priority.HIGH_NOT_URGENT, quadrants[1].priority)
+        assertEquals(45, quadrants[1].totalTargetMinutes)
+        assertEquals(Priority.NORMAL, quadrants[2].priority)
+        assertEquals(10, quadrants[2].totalTargetMinutes)
+        assertEquals(Priority.LOW, quadrants[3].priority)
+        assertEquals(1, quadrants[3].completedCount)
+
+        // 2. Verify Maslow Pyramid detects low physiological survival foundation when sleep/water/meals are low
+        val depletedHealth = DailyHealthLog(date = "2026-11-08", sleepHours = 4.0f, waterMl = 250, breakfastLogged = false, lunchLogged = false, dinnerLogged = false)
+        val assessment = com.example.data.engine.MaslowPyramidEngine.evaluateMaslowPyramid(
+            healthLog = depletedHealth,
+            tasks = sampleTasks,
+            journalEntry = null,
+            isPlanOverloaded = false
+        )
+        assertEquals(5, assessment.tiersTopToBottom.size)
+        assertEquals(
+            com.example.data.engine.MaslowLevel.PHYSIOLOGICAL_SURVIVAL,
+            assessment.bottleneckTier.level
+        )
+        assertTrue(assessment.secretaryInsight.contains("生理生存需求"))
+    }
+
+    @Test
+    fun `verify personal self menu CRUD with multi tags and choosing meal logs today health meal slot`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = AppDatabase.getDatabase(context)
+        val repo = StudentLifeRepository(db)
+
+        // Add a custom tagged self-menu item for dinner
+        val newId = repo.addSelfMenuItem(
+            com.example.data.model.SelfMenuItem(
+                name = "巷口舒肥雞肉飯＋燙地瓜葉",
+                mealSlot = "晚餐",
+                tags = listOf("高蛋白健腦", "低GI防昏睡", "銅板省錢"),
+                brainBenefitNote = "補習前快速補充優質蛋白與葉黃素"
+            )
+        )
+        assertTrue(newId > 0)
+
+        val allItems = db.selfMenuDao().getAllMenuItemsSync()
+        val added = allItems.find { it.id == newId }
+        assertNotNull(added)
+        assertTrue(added!!.tags.contains("低GI防昏睡"))
+        assertEquals(0, added.timesChosen)
+
+        // Choosing this dinner item should increment timesChosen and automatically log dinnerLogged = true for today
+        repo.chooseSelfMenuItem(added)
+
+        val updatedItem = db.selfMenuDao().getAllMenuItemsSync().find { it.id == newId }!!
+        assertEquals(1, updatedItem.timesChosen)
+
+        val todayHealth = db.healthDao().getHealthLogByDateSync(repo.getTodayDateString())
+        assertNotNull(todayHealth)
+        assertTrue("Choosing a 晚餐 self-menu item must automatically mark dinnerLogged = true", todayHealth!!.dinnerLogged)
+    }
 }
+
 
 
 
